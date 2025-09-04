@@ -86,6 +86,7 @@
                             <option value="pending">Pending</option>
                             <option value="approved">Approved</option>
                             <option value="superseded">Superseded</option>
+                            <option value="denied">Denied</option>
                         </select>
                     </div>
 
@@ -191,87 +192,18 @@
                         <p>Select a record or create a new one to view details.</p>
                     </div>
 
-                    <div id="schedule-detail-section" class="hidden">
-                        <h4>Schedule Details</h4>
-                        
-                        <form class="detail-form" id="scheduleForm">
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label for="scheduleAppNum" class="form-label">Schedule Number</label>
-                                    <input type="text" id="scheduleAppNum" class="form-control" placeholder="e.g., 19-022">
-                                </div>
-                                <div class="form-group">
-                                    <label for="scheduleTitle" class="form-label">Schedule Title</label>
-                                    <input type="text" id="scheduleTitle" class="form-control">
-                                </div>
-                            </div>
-
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label for="approvingBody" class="form-label">Approving Body</label>
-                                    <input type="text" id="approvingBody" class="form-control" value="State Records Commission">
-                                </div>
-                                <div class="form-group">
-                                    <label for="approvalStatus" class="form-label">Approval Status</label>
-                                    <select id="approvalStatus" class="form-control">
-                                        <option value="draft">Draft</option>
-                                        <option value="pending">Pending</option>
-                                        <option value="approved">Approved</option>
-                                        <option value="superseded">Superseded</option>
-                                    </select>
-                                    <div class="status-chips">
-                                        <button type="button" class="chip" data-value="draft">Draft</button>
-                                        <button type="button" class="chip" data-value="pending">Pending</button>
-                                        <button type="button" class="chip" data-value="approved">Approved</button>
-                                        <button type="button" class="chip" data-value="superseded">Superseded</button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="form-group">
-                                <label for="approvalDate" class="form-label">Approval Date</label>
-                                <input type="date" id="approvalDate" class="form-control">
-                            </div>
-
-                            <div class="form-group">
-                                <label for="retentionGlobal" class="form-label">Global Retention Statement</label>
-                                <textarea id="retentionGlobal" class="form-control" rows="3"></textarea>
-                            </div>
-
-                            <div class="form-group">
-                                <label for="scheduleNotes" class="form-label">Notes</label>
-                                <textarea id="scheduleNotes" class="form-control" rows="2"></textarea>
-                            </div>
-
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label for="sourcePdfName" class="form-label">Source PDF Name</label>
-                                    <input type="text" id="sourcePdfName" class="form-control">
-                                </div>
-                                <div class="form-group">
-                                    <label for="sourcePdfPages" class="form-label">PDF Page Count</label>
-                                    <input type="number" id="sourcePdfPages" class="form-control" min="0">
-                                </div>
-                            </div>
-
-                            <div class="form-group">
-                                <label for="scheduleTags" class="form-label">Tags (comma-separated)</label>
-                                <input type="text" id="scheduleTags" class="form-control" placeholder="training, certification, personnel">
-                            </div>
-
-                            <div class="form-actions">
-                                <button type="submit" class="btn btn--primary">Save Schedule</button>
-                                <button type="button" class="btn btn--outline" id="cancelScheduleBtn">Cancel</button>
-                                <button type="button" class="btn btn--outline delete-btn hidden" id="deleteScheduleBtn">Delete</button>
-                            </div>
-                        </form>
+                    <!-- Tab Navigation -->
+                    <div id="tabNavigation" class="tab-navigation hidden" role="tablist" aria-label="Record details tabs">
+                        <button class="tab-button active" id="seriesTab" role="tab" aria-selected="true" aria-controls="seriesTabPanel" tabindex="0">
+                            Series Details
+                        </button>
+                        <button class="tab-button" id="scheduleTab" role="tab" aria-selected="false" aria-controls="scheduleTabPanel" tabindex="-1">
+                            Schedule Details
+                        </button>
                     </div>
 
-                    <hr id="detail-divider" class="hidden">
-
-                    <div id="series-detail-section" class="hidden">
-                        <h4>Series Item Details</h4>
-                        
+                    <!-- Series Tab Panel -->
+                    <div id="seriesTabPanel" class="tab-panel hidden" role="tabpanel" aria-labelledby="seriesTab">
                         <form class="detail-form" id="seriesForm">
                             <div class="form-row">
                                 <div class="form-group">
@@ -479,6 +411,53 @@
                                 <button type="submit" class="btn btn--primary">Save Series Item</button>
                                 <button type="button" class="btn btn--outline" id="cancelSeriesBtn">Cancel</button>
                                 <button type="button" class="btn btn--outline delete-btn hidden" id="deleteSeriesBtn">Delete</button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <!-- Schedule Tab Panel -->
+                    <div id="scheduleTabPanel" class="tab-panel hidden" role="tabpanel" aria-labelledby="scheduleTab">
+                        <form class="detail-form" id="scheduleForm">
+                            <div class="form-group">
+                                <label for="scheduleAppNum" class="form-label">Schedule Number</label>
+                                <input type="text" id="scheduleAppNum" class="form-control" placeholder="e.g., 19-022">
+                            </div>
+
+                            <div class="form-group">
+                                <label for="approvalStatus" class="form-label">Approval Status</label>
+                                <select id="approvalStatus" class="form-control">
+                                    <option value="draft">Draft</option>
+                                    <option value="pending">Pending</option>
+                                    <option value="approved">Approved</option>
+                                    <option value="superseded">Superseded</option>
+                                    <option value="denied">Denied</option>
+                                </select>
+                                <div class="status-chips">
+                                    <button type="button" class="chip" data-value="draft">Draft</button>
+                                    <button type="button" class="chip" data-value="pending">Pending</button>
+                                    <button type="button" class="chip" data-value="approved">Approved</button>
+                                    <button type="button" class="chip" data-value="superseded">Superseded</button>
+                                    <button type="button" class="chip" data-value="denied">Denied</button>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="approvalDate" class="form-label">Approval Date</label>
+                                <input type="date" id="approvalDate" class="form-control">
+                            </div>
+
+
+                            <div class="form-group">
+                                <label for="scheduleNotes" class="form-label">Notes</label>
+                                <textarea id="scheduleNotes" class="form-control" rows="2"></textarea>
+                            </div>
+
+
+
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn--primary">Save Schedule</button>
+                                <button type="button" class="btn btn--outline" id="cancelScheduleBtn">Cancel</button>
+                                <button type="button" class="btn btn--outline delete-btn hidden" id="deleteScheduleBtn">Delete</button>
                             </div>
                         </form>
                     </div>
