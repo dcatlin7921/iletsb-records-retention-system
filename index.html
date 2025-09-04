@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ILETSB Records Retention Inventory</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Top Navigation -->
+        <header class="top-nav">
+            <div class="nav-left">
+                <h1>ILETSB Records Retention Inventory</h1>
+                <span class="version">v1.0</span>
+            </div>
+            <div class="nav-right">
+                <div class="admin-menu" id="adminMenu">
+                    <button class="btn btn--secondary btn--sm" id="adminMenuBtn" aria-haspopup="true" aria-expanded="false" aria-controls="adminDropdown">
+                        <span>Admin</span>
+                        <span aria-hidden="true">▾</span>
+                    </button>
+                    <div class="dropdown hidden" id="adminDropdown" role="menu" aria-labelledby="adminMenuBtn">
+                        <button class="dropdown-item" id="newScheduleBtn" role="menuitem">New Schedule</button>
+                        <button class="dropdown-item" id="newSeriesBtn" role="menuitem">New Series Item</button>
+                        <hr class="dropdown-sep" aria-hidden="true">
+                        <button class="dropdown-item" id="exportBtn" role="menuitem">Export JSON</button>
+                        <button class="dropdown-item" id="importBtn" role="menuitem">Import JSON</button>
+                        <button class="dropdown-item" id="importCsvBtn" role="menuitem">Import CSV</button>
+                        <hr class="dropdown-sep" aria-hidden="true">
+                        <button class="dropdown-item" id="printReportBtn" role="menuitem">Print Report</button>
+                        <button class="dropdown-item" id="exportFilteredBtn" role="menuitem">Export Filtered</button>
+                        <hr class="dropdown-sep" aria-hidden="true">
+                        <button class="dropdown-item danger" id="clearDbBtn" role="menuitem" aria-describedby="clearDbDesc">Clear DB</button>
+                        <span id="clearDbDesc" class="sr-only">Removes all schedules, series items, and audit logs from this browser.</span>
+                    </div>
+                </div>
+                <input type="file" id="importFile" accept=".json" style="display: none;">
+                <input type="file" id="importCsvFile" accept=".csv" style="display: none;">
+            </div>
+        </header>
+
+        <!-- Main Content - Three Panes -->
+        <main class="main-content">
+            <!-- Left Pane - Search & Filters -->
+            <aside class="search-pane" id="searchPane">
+                <div class="search-section">
+                    <div class="search-header">
+                        <h3>Search & Filters</h3>
+                        <button class="search-toggle-btn" id="searchToggleBtn" aria-label="Toggle search pane" aria-expanded="true">
+                            <svg class="caret" aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none">
+                                <path d="M4 2L8 6L4 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </button>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="searchInput" class="form-label">Search Records</label>
+                        <input 
+                            type="text" 
+                            id="searchInput" 
+                            class="form-control" 
+                            placeholder="Search titles, descriptions..."
+                            aria-label="Search records">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="applicationFilter" class="form-label">Schedule Number</label>
+                        <select id="applicationFilter" class="form-control" aria-label="Filter by schedule number">
+                            <option value="">All Schedules</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="divisionFilter" class="form-label">Division</label>
+                        <select id="divisionFilter" class="form-control" aria-label="Filter by division">
+                            <option value="">All Divisions</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="statusFilter" class="form-label">Approval Status</label>
+                        <select id="statusFilter" class="form-control" aria-label="Filter by approval status">
+                            <option value="">All Statuses</option>
+                            <option value="draft">Draft</option>
+                            <option value="pending">Pending</option>
+                            <option value="approved">Approved</option>
+                            <option value="superseded">Superseded</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Retention Type</label>
+                        <div class="checkbox-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="permanentFilter">
+                                <span>Permanent Records</span>
+                            </label>
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="termFilter">
+                                <span>Term Records</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="retentionCategoryFilter" class="form-label">Retention Category</label>
+                        <select id="retentionCategoryFilter" class="form-control" aria-label="Filter by retention category">
+                            <option value="">All Categories</option>
+                            <option value="permanent">Permanent</option>
+                            <option value="time-limited">Time-Limited</option>
+                            <option value="unknown">Unknown</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Approval Date Range</label>
+                        <div class="date-range">
+                            <input type="date" id="approvalDateStart" class="form-control" placeholder="Start date">
+                            <span class="date-separator">to</span>
+                            <input type="date" id="approvalDateEnd" class="form-control" placeholder="End date">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Coverage Date Range</label>
+                        <div class="date-range">
+                            <input type="text" id="coverageDateStart" class="form-control" placeholder="Start year (YYYY)">
+                            <span class="date-separator">to</span>
+                            <input type="text" id="coverageDateEnd" class="form-control" placeholder="End year (YYYY)">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <button class="btn btn--secondary btn--sm btn--full-width" id="clearFiltersBtn">
+                            Clear Filters
+                        </button>
+                    </div>
+
+                    <div class="results-summary" id="resultsSummary" role="status" aria-live="polite">
+                        <span class="count">0 records found</span>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Center Pane - Results List -->
+            <section class="results-pane">
+                <div class="results-header">
+                    <h3>Series Items</h3>
+                    <div class="sort-controls">
+                        <label for="sortBy" class="form-label">Sort by:</label>
+                        <select id="sortBy" class="form-control" aria-label="Sort results by">
+                            <option value="item_number">Item Number</option>
+                            <option value="record_series_title">Series Title</option>
+                            <option value="application_number">Application Number</option>
+                            <option value="division">Division</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="results-container" id="resultsContainer" role="region" aria-label="Search results">
+                    <div class="results-table-header" role="row">
+                        <div class="col-app-num" role="columnheader">App #</div>
+                        <div class="col-item-num" role="columnheader">Item #</div>
+                        <div class="col-title" role="columnheader">Series Title</div>
+                        <div class="col-division" role="columnheader">Division</div>
+                    </div>
+                    
+                    <div class="results-list" id="resultsList" role="list" aria-live="polite" aria-label="Series items list">
+                        <div class="empty-state" id="emptyState" role="status">
+                            <p>No records found. Create your first schedule or series item to get started.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="loading-state hidden" id="loadingState" role="status" aria-live="polite">
+                    <p>Loading records...</p>
+                </div>
+            </section>
+
+            <!-- Right Pane - Detail/Editor -->
+            <section class="detail-pane">
+                <div class="detail-header">
+                    <h3>Record Details</h3>
+                </div>
+
+                <div class="detail-content-area">
+                    <div id="noSelectionMessage">
+                        <div class="icon">📋</div>
+                        <h4>No Selection</h4>
+                        <p>Select a record or create a new one to view details.</p>
+                    </div>
+
+                    <div id="schedule-detail-section" class="hidden">
+                        <h4>Schedule Details</h4>
+                        
+                        <form class="detail-form" id="scheduleForm">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="scheduleAppNum" class="form-label">Schedule Number</label>
+                                    <input type="text" id="scheduleAppNum" class="form-control" placeholder="e.g., 19-022">
+                                </div>
+                                <div class="form-group">
+                                    <label for="scheduleTitle" class="form-label">Schedule Title</label>
+                                    <input type="text" id="scheduleTitle" class="form-control">
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="approvingBody" class="form-label">Approving Body</label>
+                                    <input type="text" id="approvingBody" class="form-control" value="State Records Commission">
+                                </div>
+                                <div class="form-group">
+                                    <label for="approvalStatus" class="form-label">Approval Status</label>
+                                    <select id="approvalStatus" class="form-control">
+                                        <option value="draft">Draft</option>
+                                        <option value="pending">Pending</option>
+                                        <option value="approved">Approved</option>
+                                        <option value="superseded">Superseded</option>
+                                    </select>
+                                    <div class="status-chips">
+                                        <button type="button" class="chip" data-value="draft">Draft</button>
+                                        <button type="button" class="chip" data-value="pending">Pending</button>
+                                        <button type="button" class="chip" data-value="approved">Approved</button>
+                                        <button type="button" class="chip" data-value="superseded">Superseded</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="approvalDate" class="form-label">Approval Date</label>
+                                <input type="date" id="approvalDate" class="form-control">
+                            </div>
+
+                            <div class="form-group">
+                                <label for="retentionGlobal" class="form-label">Global Retention Statement</label>
+                                <textarea id="retentionGlobal" class="form-control" rows="3"></textarea>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="scheduleNotes" class="form-label">Notes</label>
+                                <textarea id="scheduleNotes" class="form-control" rows="2"></textarea>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="sourcePdfName" class="form-label">Source PDF Name</label>
+                                    <input type="text" id="sourcePdfName" class="form-control">
+                                </div>
+                                <div class="form-group">
+                                    <label for="sourcePdfPages" class="form-label">PDF Page Count</label>
+                                    <input type="number" id="sourcePdfPages" class="form-control" min="0">
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="scheduleTags" class="form-label">Tags (comma-separated)</label>
+                                <input type="text" id="scheduleTags" class="form-control" placeholder="training, certification, personnel">
+                            </div>
+
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn--primary">Save Schedule</button>
+                                <button type="button" class="btn btn--outline" id="cancelScheduleBtn">Cancel</button>
+                                <button type="button" class="btn btn--outline delete-btn hidden" id="deleteScheduleBtn">Delete</button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <hr id="detail-divider" class="hidden">
+
+                    <div id="series-detail-section" class="hidden">
+                        <h4>Series Item Details</h4>
+                        
+                        <form class="detail-form" id="seriesForm">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="seriesAppNum" class="form-label">Schedule Number</label>
+                                    <input type="text" id="seriesAppNum" class="form-control" placeholder="e.g., 19-022" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="itemNumber" class="form-label">Series Number</label>
+                                    <input type="text" id="itemNumber" class="form-control" placeholder="e.g., 100.01" required>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="seriesTitle" class="form-label">Record Series Title</label>
+                                <input type="text" id="seriesTitle" class="form-control" required>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="seriesDescription" class="form-label">Description</label>
+                                <textarea id="seriesDescription" class="form-control" rows="3"></textarea>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="datesStart" class="form-label">Dates Covered Start</label>
+                                    <input type="text" id="datesStart" class="form-control" placeholder="YYYY or YYYY-MM-DD">
+                                </div>
+                                <div class="form-group">
+                                    <label for="datesEnd" class="form-label">Dates Covered End</label>
+                                    <input type="text" id="datesEnd" class="form-control" placeholder="YYYY, YYYY-MM-DD, or 'present'">
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="seriesDivision" class="form-label">Division</label>
+                                    <input type="text" id="seriesDivision" class="form-control">
+                                </div>
+                                <div class="form-group">
+                                    <label for="seriesContact" class="form-label">Contact</label>
+                                    <input type="text" id="seriesContact" class="form-control">
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="seriesLocation" class="form-label">Location</label>
+                                <input type="text" id="seriesLocation" class="form-control">
+                            </div>
+
+                            <div class="retention-section">
+                                <h4>Retention Information</h4>
+                                
+                                <div class="form-group">
+                                    <label class="checkbox-label retention-toggle">
+                                        <input type="checkbox" id="isPermanent">
+                                        <span>Permanent Retention</span>
+                                    </label>
+                                </div>
+
+                                <div class="form-group" id="retentionTermGroup">
+                                    <label for="retentionTerm" class="form-label">Retention Term (years)</label>
+                                    <input type="number" id="retentionTerm" class="form-control" min="0">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="retentionText" class="form-label">Retention Text</label>
+                                    <textarea id="retentionText" class="form-control" rows="2"></textarea>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="retentionTrigger" class="form-label">Retention Trigger</label>
+                                    <input type="text" id="retentionTrigger" class="form-control">
+                                </div>
+
+                                <div class="checkbox-group">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="auditHold">
+                                        <span>Audit Hold Required</span>
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="litigationHold">
+                                        <span>Litigation Hold Required</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="volume-section">
+                                <h4>Volume Information</h4>
+                                
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="volumePaper" class="form-label">Paper Volume (cu ft)</label>
+                                        <input type="number" id="volumePaper" class="form-control" step="0.1" min="0">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="volumeElectronic" class="form-label">Electronic Volume (bytes)</label>
+                                        <input type="number" id="volumeElectronic" class="form-control" min="0">
+                                        <div class="byte-converter">
+                                            <button type="button" class="converter-btn" data-multiplier="1024">KB</button>
+                                            <button type="button" class="converter-btn" data-multiplier="1048576">MB</button>
+                                            <button type="button" class="converter-btn" data-multiplier="1073741824">GB</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="annualPaper" class="form-label">Annual Accum. Paper (cu ft)</label>
+                                        <input type="number" id="annualPaper" class="form-control" step="0.1" min="0">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="annualElectronic" class="form-label">Annual Accum. Electronic (bytes)</label>
+                                        <input type="number" id="annualElectronic" class="form-control" min="0">
+                                        <div class="byte-converter">
+                                            <button type="button" class="converter-btn" data-multiplier="1024">KB</button>
+                                            <button type="button" class="converter-btn" data-multiplier="1048576">MB</button>
+                                            <button type="button" class="converter-btn" data-multiplier="1073741824">GB</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="additional-fields">
+                                <h4>Additional Information</h4>
+                                
+                                <div class="form-group">
+                                    <label for="arrangement" class="form-label">Arrangement</label>
+                                    <input type="text" id="arrangement" class="form-control">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="mediaTypes" class="form-label">Media Types</label>
+                                    <input type="text" id="mediaTypes" class="form-control" placeholder="paper; electronic; multimedia">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="electronicStandard" class="form-label">Electronic Records Standard</label>
+                                    <input type="text" id="electronicStandard" class="form-control" placeholder="PDF/A, TIFF, etc.">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="numberSizeFiles" class="form-label">Number/Size of Files</label>
+                                    <input type="text" id="numberSizeFiles" class="form-control">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="indexFindingAids" class="form-label">Index or Finding Aids</label>
+                                    <input type="text" id="indexFindingAids" class="form-control">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="ombStatuteRefs" class="form-label">OMB or Statute References</label>
+                                    <input type="text" id="ombStatuteRefs" class="form-control">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="relatedSeries" class="form-label">Related Series</label>
+                                    <input type="text" id="relatedSeries" class="form-control">
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="seriesNotes" class="form-label">Series Notes</label>
+                                    <textarea id="seriesNotes" class="form-control" rows="2"></textarea>
+                                </div>
+                            </div>
+
+                            <div class="representative-section">
+                                <h4>Representative Information</h4>
+                                
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="representativeName" class="form-label">Representative Name</label>
+                                        <input type="text" id="representativeName" class="form-control">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="representativeTitle" class="form-label">Representative Title</label>
+                                        <input type="text" id="representativeTitle" class="form-control">
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="representativePhone" class="form-label">Representative Phone</label>
+                                    <input type="tel" id="representativePhone" class="form-control" placeholder="(555) 123-4567">
+                                </div>
+                            </div>
+
+                            <div class="records-officer-section">
+                                <h4>Records Officer Information</h4>
+                                
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="recordsOfficerName" class="form-label">Records Officer Name</label>
+                                        <input type="text" id="recordsOfficerName" class="form-control">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="recordsOfficerPhone" class="form-label">Records Officer Phone</label>
+                                        <input type="tel" id="recordsOfficerPhone" class="form-control" placeholder="(555) 123-4567">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn--primary">Save Series Item</button>
+                                <button type="button" class="btn btn--outline" id="cancelSeriesBtn">Cancel</button>
+                                <button type="button" class="btn btn--outline delete-btn hidden" id="deleteSeriesBtn">Delete</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Status Bar -->
+        <div class="status-bar" id="statusBar" role="status" aria-live="polite">
+            <span id="statusMessage">Ready</span>
+            <span id="recordCount" aria-label="Record count">0 schedules, 0 series items</span>
+        </div>
+    </div>
+
+    <!-- Modal for confirmations -->
+    <div class="modal hidden" id="confirmModal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+        <div class="modal-content">
+            <h3 id="confirmTitle">Confirm Action</h3>
+            <p id="confirmMessage">Are you sure you want to proceed?</p>
+            <div class="modal-actions">
+                <button class="btn btn--primary" id="confirmBtn">Confirm</button>
+                <button class="btn btn--outline" id="cancelBtn">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- CSV Import Modal -->
+    <div class="modal hidden" id="csvImportModal" role="dialog" aria-modal="true" aria-labelledby="csvImportTitle">
+        <div class="modal-content csv-modal">
+            <h3 id="csvImportTitle">CSV Import - Column Mapping</h3>
+            <p>Map CSV columns to database fields:</p>
+            
+            <div class="csv-preview" id="csvPreview" role="region" aria-label="CSV data preview">
+                <!-- CSV preview will be populated here -->
+            </div>
+            
+            <div class="column-mapping" id="columnMapping" role="region" aria-label="Column mapping controls">
+                <!-- Column mapping controls will be populated here -->
+            </div>
+            
+            <div class="modal-actions">
+                <button class="btn btn--primary" id="csvImportConfirmBtn">Import Data</button>
+                <button class="btn btn--outline" id="csvImportCancelBtn">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>< s c r i p t > c o n s o l e . l o g ( ' C a s c a d e   d e b u g g i n g   e n a b l e d . ' ) ; < / s c r i p t >  
+ 

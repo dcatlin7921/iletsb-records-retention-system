@@ -1,0 +1,2810 @@
+// ILETSB Records Retention Inventory Application
+// IndexedDB-based offline records management system
+
+/**
+ * Application constants
+ */
+const APP_CONSTANTS = {
+    DB_NAME: 'ILETSBRecords',
+    DB_VERSION: 1,
+    VIRTUAL_SCROLL_ITEM_HEIGHT: 80,
+    VIRTUAL_SCROLL_BUFFER: 5,
+    SEARCH_DEBOUNCE_MS: 300,
+    COMPLETENESS_THRESHOLDS: {
+        EXCELLENT: 90,
+        GOOD: 75,
+        FAIR: 60
+    },
+    ERROR_TYPES: {
+        DATABASE: 'DATABASE_ERROR',
+        VALIDATION: 'VALIDATION_ERROR',
+        IMPORT: 'IMPORT_ERROR',
+        EXPORT: 'EXPORT_ERROR',
+        NETWORK: 'NETWORK_ERROR'
+    }
+};
+
+/**
+ * Error handling utility
+ */
+class ErrorHandler {
+    static log(error, context = '', type = APP_CONSTANTS.ERROR_TYPES.DATABASE) {
+        const errorInfo = {
+            timestamp: new Date().toISOString(),
+            type,
+            context,
+            message: error.message || error,
+            stack: error.stack
+        };
+        
+        // Store error in localStorage for debugging
+        try {
+            const errors = JSON.parse(localStorage.getItem('iletsb_errors') || '[]');
+            errors.push(errorInfo);
+            // Keep only last 50 errors
+            if (errors.length > 50) errors.splice(0, errors.length - 50);
+            localStorage.setItem('iletsb_errors', JSON.stringify(errors));
+        } catch (e) {
+            // Fallback if localStorage is full
+        }
+        
+        // Only log to console in development
+        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+            console.error(`[${type}] ${context}:`, error);
+        }
+        
+        return errorInfo;
+    }
+    
+    static getStoredErrors() {
+        try {
+            return JSON.parse(localStorage.getItem('iletsb_errors') || '[]');
+        } catch {
+            return [];
+        }
+    }
+    
+    static clearStoredErrors() {
+        localStorage.removeItem('iletsb_errors');
+    }
+}
+
+/**
+ * Input sanitization utility
+ */
+class InputSanitizer {
+    static sanitizeText(input) {
+        if (typeof input !== 'string') return input;
+        return input
+            .replace(/[<>"'&]/g, (match) => {
+                const entities = {
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    '"': '&quot;',
+                    "'": '&#x27;',
+                    '&': '&amp;'
+                };
+                return entities[match];
+            })
+            .trim();
+    }
+    
+    static sanitizeNumber(input) {
+        const num = parseFloat(input);
+        return isNaN(num) ? 0 : num;
+    }
+    
+    static sanitizeDate(input) {
+        if (!input) return '';
+        const date = new Date(input);
+        return isNaN(date.getTime()) ? '' : input;
+    }
+}
+
+/**
+ * Safe DOM manipulation utility
+ */
+class DOMHelper {
+    static clearElement(element) {
+        if (!element) return;
+        while (element.firstChild) {
+            element.removeChild(element.firstChild);
+        }
+    }
+    
+    static createOption(value, text) {
+        const option = document.createElement('option');
+        option.value = InputSanitizer.sanitizeText(value);
+        option.textContent = InputSanitizer.sanitizeText(text);
+        return option;
+    }
+    
+    static setTextContent(element, text) {
+        if (!element) return;
+        element.textContent = InputSanitizer.sanitizeText(text);
+    }
+}
+
+class ILETSBApp {
+    constructor() {
+        this.db = null;
+        this.dbName = APP_CONSTANTS.DB_NAME;
+        this.dbVersion = APP_CONSTANTS.DB_VERSION;
+        this.currentSchedule = null;
+        this.currentSeriesItem = null;
+        this.searchTimeout = null;
+        this.schedules = [];
+        this.seriesItems = [];
+        this.filteredItems = [];
+        this.selectedItemId = null;
+        
+        this.init();
+    }
+
+    async init() {
+        try {
+            await this.initDatabase();
+            await this.loadSampleData();
+            this.initEventListeners();
+            this.restoreSearchPaneState();
+            this.updateUI();
+            this.setStatus('Ready');
+        } catch (error) {
+            ErrorHandler.log(error, 'App initialization');
+            this.setStatus('Error initializing application: ' + error.message, 'error');
+        }
+    }
+
+    // Database Management
+    async initDatabase() {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open(this.dbName, this.dbVersion);
+
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+                this.db = request.result;
+                resolve();
+            };
+
+            request.onupgradeneeded = (event) => {
+                const db = event.target.result;
+
+                // Create schedules object store
+                if (!db.objectStoreNames.contains('schedules')) {
+                    const scheduleStore = db.createObjectStore('schedules', { autoIncrement: true });
+                    scheduleStore.createIndex('schedule_number', 'schedule_number', { unique: true });
+                    scheduleStore.createIndex('approval_status', 'approval_status', { unique: false });
+                    scheduleStore.createIndex('approval_date', 'approval_date', { unique: false });
+                }
+
+                // Create series_items object store
+                if (!db.objectStoreNames.contains('series_items')) {
+                    const seriesStore = db.createObjectStore('series_items', { autoIncrement: true });
+                    seriesStore.createIndex('schedule_number', 'schedule_number', { unique: false });
+                    seriesStore.createIndex('series_number', 'series_number', { unique: true });
+                    seriesStore.createIndex('division', 'division', { unique: false });
+                    seriesStore.createIndex('retention_is_permanent', 'retention_is_permanent', { unique: false });
+                    seriesStore.createIndex('retention_term', 'retention_term', { unique: false });
+                    seriesStore.createIndex('record_series_title', 'record_series_title', { unique: false });
+                }
+
+                // Create audit_events object store
+                if (!db.objectStoreNames.contains('audit_events')) {
+                    const auditStore = db.createObjectStore('audit_events', { autoIncrement: true });
+                    auditStore.createIndex('entity', 'entity', { unique: false });
+                    auditStore.createIndex('action', 'action', { unique: false });
+                    auditStore.createIndex('at', 'at', { unique: false });
+                }
+            };
+        });
+    }
+
+    async loadSampleData() {
+        // Sample data loading has been disabled to prevent automatic data population
+        // If you need sample data, use the import functionality instead
+        return;
+    }
+
+    // Database Operations
+    async getAllSchedules() {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['schedules'], 'readonly');
+            const store = transaction.objectStore('schedules');
+            const request = store.getAll();
+            
+            request.onsuccess = () => resolve(request.result || []);
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async getAllSeriesItems() {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['series_items'], 'readonly');
+            const store = transaction.objectStore('series_items');
+            const request = store.getAll();
+            
+            request.onsuccess = () => resolve(request.result || []);
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async saveSchedule(schedule, isUpdate = false) {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['schedules'], 'readwrite');
+            const store = transaction.objectStore('schedules');
+            
+            const now = new Date().toISOString();
+            if (!isUpdate) {
+                schedule.created_at = now;
+                schedule.version = 1;
+            }
+            schedule.updated_at = now;
+            
+            const request = isUpdate ? store.put(schedule, schedule._id) : store.add(schedule);
+            
+            request.onsuccess = () => {
+                const id = request.result;
+                schedule._id = id;
+                this.logAuditEvent('schedule', id, isUpdate ? 'update' : 'create', { schedule_number: schedule.schedule_number });
+                resolve(schedule);
+            };
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async saveSeriesItem(item, isUpdate = false) {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['series_items'], 'readwrite');
+            const store = transaction.objectStore('series_items');
+            
+            const now = new Date().toISOString();
+            if (!isUpdate) {
+                item.created_at = now;
+            }
+            item.updated_at = now;
+            
+            const request = isUpdate ? store.put(item, item._id) : store.add(item);
+            
+            request.onsuccess = () => {
+                const id = request.result;
+                item._id = id;
+                this.logAuditEvent('series', id, isUpdate ? 'update' : 'create', { 
+                    schedule_number: item.schedule_number, 
+                    series_number: item.series_number 
+                });
+                resolve(item);
+            };
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async deleteSchedule(id) {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['schedules'], 'readwrite');
+            const store = transaction.objectStore('schedules');
+            const request = store.delete(id);
+            
+            request.onsuccess = () => {
+                this.logAuditEvent('schedule', id, 'delete', {});
+                resolve();
+            };
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async deleteSeriesItem(id) {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['series_items'], 'readwrite');
+            const store = transaction.objectStore('series_items');
+            const request = store.delete(id);
+            
+            request.onsuccess = () => {
+                this.logAuditEvent('series', id, 'delete', {});
+                resolve();
+            };
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async logAuditEvent(entity, entityId, action, payload) {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['audit_events'], 'readwrite');
+            const store = transaction.objectStore('audit_events');
+            
+            const event = {
+                entity,
+                entity_id: entityId,
+                action,
+                actor: 'local-user',
+                at: new Date().toISOString(),
+                payload: JSON.stringify(payload)
+            };
+            
+            const request = store.add(event);
+            request.onsuccess = () => resolve();
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    // Search and Filtering
+    async searchSeriesItems(filters = {}) {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['series_items'], 'readonly');
+            const store = transaction.objectStore('series_items');
+            const request = store.getAll();
+            
+            request.onsuccess = () => {
+                let items = request.result || [];
+                
+                // Apply filters
+                if (filters.searchText) {
+                    const searchLower = filters.searchText.toLowerCase();
+                    items = items.filter(item => 
+                        (item.record_series_title && item.record_series_title.toLowerCase().includes(searchLower)) ||
+                        (item.description && item.description.toLowerCase().includes(searchLower)) ||
+                        (item.retention_text && item.retention_text.toLowerCase().includes(searchLower))
+                    );
+                }
+                
+                if (filters.scheduleNumber) {
+                    items = items.filter(item => item.schedule_number === filters.scheduleNumber);
+                }
+                
+                if (filters.division) {
+                    items = items.filter(item => item.division === filters.division);
+                }
+                
+                if (filters.approvalStatus) {
+                    // Need to cross-reference with schedules
+                    // For now, skip this filter
+                }
+                
+                if (filters.permanentOnly !== null) {
+                    items = items.filter(item => item.retention_is_permanent === filters.permanentOnly);
+                }
+                
+                if (filters.termOnly !== null) {
+                    items = items.filter(item => !item.retention_is_permanent === filters.termOnly);
+                }
+                
+                resolve(items);
+            };
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    // UI Event Handlers
+    initEventListeners() {
+        // Top navigation
+        document.getElementById('newScheduleBtn').addEventListener('click', () => this.createNewSchedule());
+        document.getElementById('newSeriesBtn').addEventListener('click', () => this.createNewSeriesItem());
+        document.getElementById('exportBtn').addEventListener('click', () => this.exportData());
+        document.getElementById('importBtn').addEventListener('click', (e) => {
+            e.preventDefault();
+            document.getElementById('importFile').click();
+        });
+        document.getElementById('importFile').addEventListener('change', (e) => this.importData(e));
+        document.getElementById('importCsvBtn').addEventListener('click', (e) => {
+            e.preventDefault();
+            document.getElementById('importCsvFile').click();
+        });
+        document.getElementById('importCsvFile').addEventListener('change', (e) => this.handleCsvFile(e));
+        document.getElementById('csvImportConfirmBtn').addEventListener('click', () => this.processCsvImport());
+        document.getElementById('csvImportCancelBtn').addEventListener('click', () => this.hideCsvModal());
+        document.getElementById('printReportBtn').addEventListener('click', () => this.printReport());
+        document.getElementById('exportFilteredBtn').addEventListener('click', () => this.exportFilteredData());
+
+        // Search and filters
+        document.getElementById('searchInput').addEventListener('input', (e) => this.debounceSearch(e.target.value));
+        document.getElementById('applicationFilter').addEventListener('change', () => this.applyFilters());
+        document.getElementById('divisionFilter').addEventListener('change', () => this.applyFilters());
+        document.getElementById('statusFilter').addEventListener('change', () => this.applyFilters());
+        document.getElementById('permanentFilter').addEventListener('change', () => this.applyFilters());
+        document.getElementById('termFilter').addEventListener('change', () => this.applyFilters());
+        document.getElementById('retentionCategoryFilter').addEventListener('change', () => this.applyFilters());
+        document.getElementById('approvalDateStart').addEventListener('change', () => this.applyFilters());
+        document.getElementById('approvalDateEnd').addEventListener('change', () => this.applyFilters());
+        document.getElementById('coverageDateStart').addEventListener('input', () => this.debounceSearch());
+        document.getElementById('coverageDateEnd').addEventListener('input', () => this.debounceSearch());
+        document.getElementById('clearFiltersBtn').addEventListener('click', () => this.clearFilters());
+        document.getElementById('sortBy').addEventListener('change', () => this.applyFilters());
+
+        // Search pane toggle
+        document.getElementById('searchToggleBtn').addEventListener('click', () => this.toggleSearchPane());
+
+        // Tab buttons removed - using unified detail pane
+
+        // Forms
+        document.getElementById('scheduleForm').addEventListener('submit', (e) => this.handleScheduleSubmit(e));
+        const seriesForm = document.getElementById('seriesForm');
+        console.log('Setting up seriesForm event listener, form found:', !!seriesForm);
+        if (seriesForm) {
+            seriesForm.addEventListener('submit', (e) => this.handleSeriesSubmit(e));
+            console.log('seriesForm submit event listener attached');
+        } else {
+            console.error('seriesForm element not found during event listener setup');
+        }
+        
+        document.getElementById('cancelScheduleBtn').addEventListener('click', () => this.cancelScheduleEdit());
+        document.getElementById('cancelSeriesBtn').addEventListener('click', () => this.cancelSeriesEdit());
+        document.getElementById('deleteScheduleBtn').addEventListener('click', () => this.confirmDeleteSchedule());
+        document.getElementById('deleteSeriesBtn').addEventListener('click', () => this.confirmDeleteSeriesItem());
+
+        // Retention toggle
+        document.getElementById('isPermanent').addEventListener('change', (e) => {
+            const retentionTermGroup = document.getElementById('retentionTermGroup');
+            if (retentionTermGroup) {
+                retentionTermGroup.style.display = e.target.checked ? 'none' : 'block';
+                if (e.target.checked) {
+                    const retentionTermInput = document.getElementById('retentionTerm');
+                    if (retentionTermInput) {
+                        retentionTermInput.value = '';
+                    }
+                }
+            }
+        });
+
+        // Modal
+        document.getElementById('confirmBtn').addEventListener('click', () => this.handleConfirm());
+        document.getElementById('cancelBtn').addEventListener('click', () => this.hideModal());
+
+        // Status chips
+        document.querySelectorAll('.chip').forEach(chip => {
+            chip.addEventListener('click', (e) => {
+                const value = e.target.dataset.value;
+                const select = e.target.closest('.form-group').querySelector('select');
+                if (select) {
+                    select.value = value;
+                    this.updateChipSelection(e.target.parentElement, value);
+                }
+            });
+        });
+
+        // Byte converters
+        document.querySelectorAll('.converter-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const multiplier = parseInt(e.target.dataset.multiplier);
+                const input = e.target.closest('.form-group').querySelector('input[type="number"]');
+                if (input && input.value) {
+                    const currentValue = parseFloat(input.value);
+                    input.value = Math.round(currentValue * multiplier);
+                }
+            });
+        });
+
+        // Enhanced form validation
+        document.querySelectorAll('.form-control').forEach(input => {
+            input.addEventListener('blur', (e) => this.validateField(e.target));
+            input.addEventListener('input', (e) => this.clearFieldError(e.target));
+        });
+
+        // Combined keyboard handling (shortcuts + navigation)
+        document.addEventListener('keydown', (e) => {
+            // Handle keyboard shortcuts first
+            if (e.key === 'Escape') {
+                this.handleEscapeKey();
+            } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                this.handleSaveShortcut();
+            } else {
+                // Handle general keyboard navigation
+                this.handleKeydown(e);
+            }
+        });
+
+        // Admin menu wiring
+        this.setupAdminMenu();
+
+        // Global click handler for closing dropdowns
+        document.addEventListener('click', (e) => this.handleGlobalClick(e));
+    }
+
+    debounceSearch(searchText) {
+        clearTimeout(this.searchTimeout);
+        this.searchTimeout = setTimeout(() => {
+            this.applyFilters();
+        }, 300);
+    }
+
+    // Performance optimized data loading
+    async loadDataOptimized() {
+        // Use IndexedDB cursors to avoid loading everything into memory
+        this.schedules = [];
+        this.seriesItems = [];
+        
+        // Load schedules with cursor
+        await this.loadSchedulesWithCursor();
+        
+        // Load series items count only for UI updates
+        this.totalSeriesCount = await this.getSeriesItemsCount();
+        
+        this.populateFilterDropdowns();
+        await this.renderResults();
+        this.updateResultsSummary();
+        this.updateRecordCount();
+    }
+
+    async loadSchedulesWithCursor(limit = null, offset = 0) {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['schedules'], 'readonly');
+            const store = transaction.objectStore('schedules');
+            const request = store.openCursor();
+            
+            let count = 0;
+            let skipped = 0;
+            const results = [];
+            
+            request.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (cursor) {
+                    if (skipped < offset) {
+                        skipped++;
+                        cursor.continue();
+                        return;
+                    }
+                    
+                    if (limit && count >= limit) {
+                        resolve(results);
+                        return;
+                    }
+                    
+                    results.push({ ...cursor.value, _id: cursor.key });
+                    count++;
+                    cursor.continue();
+                } else {
+                    resolve(results);
+                }
+            };
+            
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async getSeriesItemsCount() {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['series_items'], 'readonly');
+            const store = transaction.objectStore('series_items');
+            const request = store.count();
+            
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async applyFilters() {
+        const searchInput = document.getElementById('searchInput');
+        const applicationFilter = document.getElementById('applicationFilter');
+        const divisionFilter = document.getElementById('divisionFilter');
+        const statusFilter = document.getElementById('statusFilter');
+        const permanentFilter = document.getElementById('permanentFilter');
+        const termFilter = document.getElementById('termFilter');
+
+        // Check if elements exist before accessing values
+        if (!searchInput || !applicationFilter || !divisionFilter || !statusFilter || !permanentFilter || !termFilter) {
+            ErrorHandler.log(new Error('Filter elements not found'), 'Apply filters', APP_CONSTANTS.ERROR_TYPES.VALIDATION);
+            return;
+        }
+
+        const filters = {
+            searchText: searchInput.value.trim(),
+            scheduleNumber: applicationFilter.value,
+            division: divisionFilter.value,
+            approvalStatus: statusFilter.value,
+            permanentOnly: permanentFilter.checked ? true : null,
+            termOnly: termFilter.checked ? true : null
+        };
+
+        try {
+            this.filteredItems = await this.searchSeriesItems(filters);
+            this.sortResults();
+            this.renderResults();
+            this.updateResultsSummary();
+        } catch (error) {
+            ErrorHandler.log(error, 'Apply filters');
+            this.setStatus('Error applying filters: ' + error.message, 'error');
+        }
+    }
+
+    sortResults() {
+        const sortByElement = document.getElementById('sortBy');
+        if (!sortByElement) return;
+        
+        const sortBy = sortByElement.value;
+        this.filteredItems.sort((a, b) => {
+            const aVal = a[sortBy] || '';
+            const bVal = b[sortBy] || '';
+            return aVal.toString().localeCompare(bVal.toString());
+        });
+    }
+
+    clearFilters() {
+        const elements = [
+            'searchInput', 'applicationFilter', 'divisionFilter', 
+            'statusFilter', 'permanentFilter', 'termFilter', 'retentionCategoryFilter',
+            'approvalDateStart', 'approvalDateEnd', 'coverageDateStart', 'coverageDateEnd'
+        ];
+        
+        elements.forEach(id => {
+            const element = document.getElementById(id);
+            if (element) {
+                if (element.type === 'checkbox') {
+                    element.checked = false;
+                } else {
+                    element.value = '';
+                }
+            }
+        });
+        
+        this.applyFilters();
+    }
+
+    async updateUI() {
+        try {
+            this.schedules = await this.getAllSchedules();
+            this.seriesItems = await this.getAllSeriesItems();
+            this.filteredItems = [...this.seriesItems];
+            
+            this.populateFilterDropdowns();
+            this.renderResults();
+            this.updateResultsSummary();
+            this.updateRecordCount();
+        } catch (error) {
+            ErrorHandler.log(error, 'UI update');
+        }
+    }
+
+    populateFilterDropdowns() {
+        // Schedule numbers
+        const scheduleNumbers = [...new Set(this.schedules.map(s => s.schedule_number).filter(n => n))];
+        const scheduleSelect = document.getElementById('applicationFilter');
+        if (scheduleSelect) {
+            DOMHelper.clearElement(scheduleSelect);
+            scheduleSelect.appendChild(DOMHelper.createOption('', 'All Schedules'));
+            scheduleNumbers.forEach(num => {
+                scheduleSelect.appendChild(DOMHelper.createOption(num, num));
+            });
+        }
+
+        // Divisions
+        const divisions = [...new Set(this.seriesItems.map(s => s.division).filter(d => d))];
+        const divSelect = document.getElementById('divisionFilter');
+        if (divSelect) {
+            DOMHelper.clearElement(divSelect);
+            divSelect.appendChild(DOMHelper.createOption('', 'All Divisions'));
+            divisions.forEach(div => {
+                divSelect.appendChild(DOMHelper.createOption(div, div));
+            });
+        }
+    }
+
+    async renderResults() {
+        const resultsList = document.getElementById('resultsList');
+        const emptyState = document.getElementById('emptyState');
+        
+        if (!resultsList || !emptyState) return;
+        
+        // Initialize virtual scrolling if not already done
+        if (!this.virtualScroller) {
+            this.initVirtualScrolling();
+        }
+        
+        // Get filtered count using IndexedDB cursors
+        const filteredCount = await this.getFilteredItemsCount();
+        
+        if (filteredCount === 0) {
+            DOMHelper.clearElement(resultsList);
+            resultsList.appendChild(emptyState);
+            return;
+        }
+
+        emptyState.style.display = 'none';
+        
+        // Render virtual viewport
+        await this.renderVirtualViewport();
+    }
+
+    initVirtualScrolling() {
+        const resultsList = document.getElementById('resultsList');
+        if (!resultsList) return;
+
+        this.virtualScroller = {
+            itemHeight: 60, // Height of each result row in pixels
+            viewportHeight: 0,
+            scrollTop: 0,
+            totalItems: 0,
+            visibleStart: 0,
+            visibleEnd: 0,
+            buffer: 5 // Extra items to render for smooth scrolling
+        };
+
+        // Set up scroll container
+        resultsList.style.position = 'relative';
+        resultsList.style.overflow = 'auto';
+        resultsList.style.height = '100%';
+
+        // Add scroll listener with throttling
+        let scrollTimeout;
+        resultsList.addEventListener('scroll', () => {
+            if (scrollTimeout) clearTimeout(scrollTimeout);
+            scrollTimeout = setTimeout(() => {
+                this.handleVirtualScroll();
+            }, 16); // ~60fps
+        });
+
+        // Calculate viewport height
+        this.virtualScroller.viewportHeight = resultsList.clientHeight;
+    }
+
+    async handleVirtualScroll() {
+        const resultsList = document.getElementById('resultsList');
+        if (!resultsList || !this.virtualScroller) return;
+
+        this.virtualScroller.scrollTop = resultsList.scrollTop;
+        await this.renderVirtualViewport();
+    }
+
+    async renderVirtualViewport() {
+        const resultsList = document.getElementById('resultsList');
+        if (!resultsList || !this.virtualScroller) return;
+
+        const { itemHeight, viewportHeight, scrollTop, buffer } = this.virtualScroller;
+        
+        // Calculate visible range
+        const visibleStart = Math.max(0, Math.floor(scrollTop / itemHeight) - buffer);
+        const visibleCount = Math.ceil(viewportHeight / itemHeight) + (buffer * 2);
+        const visibleEnd = Math.min(await this.getFilteredItemsCount(), visibleStart + visibleCount);
+
+        // Only re-render if range changed significantly
+        if (Math.abs(visibleStart - this.virtualScroller.visibleStart) < 2 && 
+            Math.abs(visibleEnd - this.virtualScroller.visibleEnd) < 2) {
+            return;
+        }
+
+        this.virtualScroller.visibleStart = visibleStart;
+        this.virtualScroller.visibleEnd = visibleEnd;
+
+        // Get items for visible range using cursor
+        const visibleItems = await this.getFilteredItemsRange(visibleStart, visibleEnd - visibleStart);
+        
+        // Calculate total height and create spacers
+        const totalItems = await this.getFilteredItemsCount();
+        const totalHeight = totalItems * itemHeight;
+        const offsetY = visibleStart * itemHeight;
+
+        // Clear and rebuild viewport
+        DOMHelper.clearElement(resultsList);
+
+        // Top spacer
+        if (offsetY > 0) {
+            const topSpacer = document.createElement('div');
+            topSpacer.style.height = `${offsetY}px`;
+            topSpacer.className = 'virtual-spacer';
+            resultsList.appendChild(topSpacer);
+        }
+
+        // Visible items
+        visibleItems.forEach((item, index) => {
+            const row = this.createResultRow(item, visibleStart + index);
+            resultsList.appendChild(row);
+        });
+
+        // Bottom spacer
+        const bottomSpacerHeight = totalHeight - offsetY - (visibleItems.length * itemHeight);
+        if (bottomSpacerHeight > 0) {
+            const bottomSpacer = document.createElement('div');
+            bottomSpacer.style.height = `${bottomSpacerHeight}px`;
+            bottomSpacer.className = 'virtual-spacer';
+            resultsList.appendChild(bottomSpacer);
+        }
+    }
+
+    async getFilteredItemsCount() {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['series_items'], 'readonly');
+            const store = transaction.objectStore('series_items');
+            const request = store.openCursor();
+            
+            let count = 0;
+            
+            request.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (cursor) {
+                    if (this.matchesCurrentFilters(cursor.value)) {
+                        count++;
+                    }
+                    cursor.continue();
+                } else {
+                    resolve(count);
+                }
+            };
+            
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async getFilteredItemsRange(offset, limit) {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['series_items'], 'readonly');
+            const store = transaction.objectStore('series_items');
+            const request = store.openCursor();
+            
+            const items = [];
+            let currentIndex = 0;
+            let foundItems = 0;
+            
+            request.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (cursor) {
+                    if (this.matchesCurrentFilters(cursor.value)) {
+                        if (currentIndex >= offset && foundItems < limit) {
+                            items.push({ ...cursor.value, _id: cursor.key });
+                            foundItems++;
+                        }
+                        currentIndex++;
+                        
+                        if (foundItems >= limit) {
+                            resolve(items);
+                            return;
+                        }
+                    }
+                    cursor.continue();
+                } else {
+                    resolve(items);
+                }
+            };
+            
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    matchesCurrentFilters(item) {
+        // Apply current search and filter criteria
+        const searchTerm = document.getElementById('searchInput')?.value.toLowerCase() || '';
+        const applicationFilter = document.getElementById('applicationFilter')?.value || '';
+        const divisionFilter = document.getElementById('divisionFilter')?.value || '';
+        const statusFilter = document.getElementById('statusFilter')?.value || '';
+        const permanentFilter = document.getElementById('permanentFilter')?.checked || false;
+        const termFilter = document.getElementById('termFilter')?.checked || false;
+        const retentionCategoryFilter = document.getElementById('retentionCategoryFilter')?.value || '';
+        const approvalDateStart = document.getElementById('approvalDateStart')?.value || '';
+        const approvalDateEnd = document.getElementById('approvalDateEnd')?.value || '';
+        const coverageDateStart = document.getElementById('coverageDateStart')?.value || '';
+        const coverageDateEnd = document.getElementById('coverageDateEnd')?.value || '';
+
+        // Enhanced search term filter - search across more fields
+        if (searchTerm) {
+            const searchFields = [
+                item.record_series_title,
+                item.description,
+                item.retention_text,
+                item.application_number,
+                item.item_number,
+                item.division,
+                item.contact,
+                item.location,
+                item.arrangement,
+                item.media_types,
+                item.series_notes,
+                item.representative_name,
+                item.records_officer_name
+            ].join(' ').toLowerCase();
+            
+            if (!searchFields.includes(searchTerm)) {
+                return false;
+            }
+        }
+
+        // Application number filter
+        if (applicationFilter && item.application_number !== applicationFilter) {
+            return false;
+        }
+
+        // Division filter
+        if (divisionFilter && item.division !== divisionFilter) {
+            return false;
+        }
+
+        // Status filter
+        if (statusFilter) {
+            const schedule = this.schedules.find(s => s.application_number === item.application_number);
+            const approvalStatus = schedule ? (schedule.approval_status || 'Unapproved') : 'Unapproved';
+            if (approvalStatus !== statusFilter) return false;
+        }
+
+        // Retention type filters
+        if (permanentFilter && termFilter) {
+            // Both selected - show all
+        } else if (permanentFilter && !item.retention_is_permanent) {
+            return false;
+        } else if (termFilter && item.retention_is_permanent) {
+            return false;
+        } else if (!permanentFilter && !termFilter) {
+            // Neither selected - show all
+        }
+
+        // Retention category filter
+        if (retentionCategoryFilter) {
+            const category = this.getRetentionCategory(item);
+            if (category !== retentionCategoryFilter) {
+                return false;
+            }
+        }
+
+        // Approval date range filter (uses schedule.approval_date)
+        if (approvalDateStart || approvalDateEnd) {
+            const schedule = this.schedules.find(s => s.application_number === item.application_number);
+            if (!schedule || !schedule.approval_date) {
+                // If date filter is set but no approval date exists, exclude
+                return false;
+            }
+            const approvalYear = this.extractYear(schedule.approval_date);
+            if (approvalDateStart) {
+                const filterStartYear = parseInt(approvalDateStart);
+                if (approvalYear && approvalYear < filterStartYear) {
+                    return false;
+                }
+            }
+            if (approvalDateEnd) {
+                const filterEndYear = parseInt(approvalDateEnd);
+                if (approvalYear && approvalYear > filterEndYear) {
+                    return false;
+                }
+            }
+        }
+
+        // Coverage date range filter
+        if (coverageDateStart || coverageDateEnd) {
+            const startYear = this.extractYear(item.dates_covered_start);
+            const endYear = this.extractYear(item.dates_covered_end);
+            
+            if (coverageDateStart) {
+                const filterStartYear = parseInt(coverageDateStart);
+                if (startYear && startYear < filterStartYear) {
+                    return false;
+                }
+            }
+            
+            if (coverageDateEnd) {
+                const filterEndYear = parseInt(coverageDateEnd);
+                if (endYear && endYear > filterEndYear) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    getRetentionCategory(item) {
+        if (item.retention_is_permanent) {
+            return 'permanent';
+        } else if (item.retention_term && item.retention_term > 0) {
+            return 'time-limited';
+        } else {
+            return 'unknown';
+        }
+    }
+
+    extractYear(dateString) {
+        if (!dateString) return null;
+        if (dateString.toLowerCase() === 'present') return new Date().getFullYear();
+        
+        // Try to extract year from various formats
+        const yearMatch = dateString.match(/(\d{4})/);
+        return yearMatch ? parseInt(yearMatch[1]) : null;
+    }
+
+    createResultRow(item, index) {
+        const row = document.createElement('div');
+        row.className = 'result-item';
+        row.dataset.itemId = item._id;
+        row.tabIndex = 0;
+
+        // Column 1: App #
+        const colApp = document.createElement('div');
+        colApp.className = 'col-app-num';
+        DOMHelper.setTextContent(colApp, item.application_number || 'N/A');
+
+        // Column 2: Item #
+        const colItem = document.createElement('div');
+        colItem.className = 'col-item-num';
+        DOMHelper.setTextContent(colItem, item.item_number || 'N/A');
+
+        // Column 3: Title
+        const colTitle = document.createElement('div');
+        colTitle.className = 'col-title';
+        DOMHelper.setTextContent(colTitle, item.record_series_title || 'Untitled');
+
+        // Column 4: Division
+        const colDivision = document.createElement('div');
+        colDivision.className = 'col-division';
+        DOMHelper.setTextContent(colDivision, item.division || '—');
+
+        row.appendChild(colApp);
+        row.appendChild(colItem);
+        row.appendChild(colTitle);
+        row.appendChild(colDivision);
+
+        // Selection handlers
+        row.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.selectSeriesItem(item);
+        });
+        row.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                this.selectSeriesItem(item);
+            }
+        });
+
+        return row;
+    }
+
+    updateResultsSummary() {
+        const summary = document.getElementById('resultsSummary');
+        if (!summary) return;
+        
+        const countElement = summary.querySelector('.count');
+        if (countElement) {
+            const count = this.filteredItems.length;
+            countElement.textContent = `${count} record${count !== 1 ? 's' : ''} found`;
+        }
+    }
+
+    updateRecordCount() {
+        const recordCountElement = document.getElementById('recordCount');
+        if (recordCountElement) {
+            // Count unique schedule numbers (check both old and new field names for compatibility)
+            const uniqueScheduleNumbers = [...new Set(this.seriesItems.map(s => s.schedule_number || s.application_number).filter(n => n))];
+            const scheduleCount = uniqueScheduleNumbers.length;
+            const seriesCount = this.seriesItems.length;
+            recordCountElement.textContent = 
+                `${scheduleCount} schedule${scheduleCount !== 1 ? 's' : ''}, ${seriesCount} series item${seriesCount !== 1 ? 's' : ''}`;
+        }
+    }
+
+    // Unified Detail Pane Management
+    displayDetails(schedule, seriesItem) {
+        // Prevent multiple rapid calls
+        if (this.displayDetailsTimeout) {
+            clearTimeout(this.displayDetailsTimeout);
+        }
+        this.displayDetailsTimeout = setTimeout(() => {
+            this._displayDetailsInternal(schedule, seriesItem);
+        }, 10);
+    }
+
+    _displayDetailsInternal(schedule, seriesItem) {
+        console.log('displayDetails called. Hiding noSelectionMessage.');
+        const noSelectionMessage = document.getElementById('noSelectionMessage');
+        const scheduleSection = document.getElementById('schedule-detail-section');
+        const seriesSection = document.getElementById('series-detail-section');
+        const divider = document.getElementById('detail-divider');
+        
+        // Hide no selection message
+        if (noSelectionMessage) {
+            noSelectionMessage.classList.add('hidden');
+            console.log('noSelectionMessage classList after hide:', noSelectionMessage.classList);
+        }
+        
+        // Show schedule section if schedule data provided
+        if (schedule && Object.keys(schedule).length > 0 && scheduleSection) {
+            scheduleSection.classList.remove('hidden');
+            this.populateScheduleForm(schedule);
+        } else if (scheduleSection) {
+            scheduleSection.classList.add('hidden');
+        }
+        
+        // Show series section if series data provided
+        if (seriesItem && Object.keys(seriesItem).length > 0 && seriesSection) {
+            seriesSection.classList.remove('hidden');
+            this.populateSeriesForm(seriesItem);
+        } else if (seriesSection) {
+            seriesSection.classList.add('hidden');
+        }
+        
+        // Show divider only if both sections are visible
+        if (divider) {
+            if (schedule && Object.keys(schedule).length > 0 && seriesItem && Object.keys(seriesItem).length > 0) {
+                divider.classList.remove('hidden');
+            } else {
+                divider.classList.add('hidden');
+            }
+        }
+    }
+    
+    hideDetails() {
+        const noSelectionMessage = document.getElementById('noSelectionMessage');
+        const scheduleSection = document.getElementById('schedule-detail-section');
+        const seriesSection = document.getElementById('series-detail-section');
+        const divider = document.getElementById('detail-divider');
+        
+        // Show no selection message
+        console.log('hideDetails called. Showing noSelectionMessage.');
+        if (noSelectionMessage) {
+            noSelectionMessage.classList.remove('hidden');
+            console.log('noSelectionMessage classList after show:', noSelectionMessage.classList);
+        }
+        
+        // Hide both sections and divider
+        if (scheduleSection) scheduleSection.classList.add('hidden');
+        if (seriesSection) seriesSection.classList.add('hidden');
+        if (divider) divider.classList.add('hidden');
+        
+        // Reset forms
+        const scheduleForm = document.getElementById('scheduleForm');
+        const seriesForm = document.getElementById('seriesForm');
+        if (scheduleForm) scheduleForm.reset();
+        if (seriesForm) seriesForm.reset();
+    }
+
+    // Record Selection and Editing
+    selectSeriesItem(item) {
+        // Clear previous selection
+        document.querySelectorAll('.result-item').forEach(row => row.classList.remove('selected'));
+        
+        // Select new item
+        const row = document.querySelector(`[data-item-id="${item._id}"]`);
+        if (row) row.classList.add('selected');
+        
+        this.selectedItemId = item._id;
+        this.currentSeriesItem = item;
+        
+        // Find the related schedule for this series item
+        let relatedSchedule = null;
+        if (item.application_number) {
+            relatedSchedule = this.schedules.find(s => s.application_number === item.application_number);
+        }
+        
+        // Display both schedule and series details
+        this.displayDetails(relatedSchedule, item);
+        
+        const deleteSeriesBtn = document.getElementById('deleteSeriesBtn');
+        if (deleteSeriesBtn) deleteSeriesBtn.classList.remove('hidden');
+    }
+
+    populateSeriesForm(item) {
+        const fields = {
+            'seriesAppNum': item.application_number || '',
+            'itemNumber': item.item_number || '',
+            'seriesTitle': item.record_series_title || '',
+            'seriesDescription': item.description || '',
+            'datesStart': item.dates_covered_start || '',
+            'datesEnd': item.dates_covered_end || '',
+            'seriesDivision': item.division || '',
+            'seriesContact': item.contact || '',
+            'seriesLocation': item.location || '',
+            'retentionTerm': item.retention_term || '',
+            'retentionText': item.retention_text || '',
+            'retentionTrigger': item.retention_trigger || '',
+            'volumePaper': item.volume_paper_cuft || '',
+            'volumeElectronic': item.volume_electronic_bytes || '',
+            'annualPaper': item.annual_accum_paper_cuft || '',
+            'annualElectronic': item.annual_accum_electronic_bytes || '',
+            'arrangement': item.arrangement || '',
+            'mediaTypes': item.media_types || '',
+            'electronicStandard': item.electronic_records_standard || '',
+            'numberSizeFiles': item.number_size_files || '',
+            'indexFindingAids': item.index_or_finding_aids || '',
+            'ombStatuteRefs': item.omb_or_statute_refs || '',
+            'relatedSeries': item.related_series || '',
+            'representativeName': item.representative_name || '',
+            'representativeTitle': item.representative_title || '',
+            'representativePhone': item.representative_phone || '',
+            'recordsOfficerName': item.records_officer_name || '',
+            'recordsOfficerPhone': item.records_officer_phone || '',
+            'seriesNotes': item.series_notes || ''
+        };
+
+        // Set text and number inputs
+        Object.keys(fields).forEach(id => {
+            const element = document.getElementById(id);
+            if (element) {
+                element.value = fields[id];
+            }
+        });
+
+        // Set checkboxes
+        const isPermanentCheckbox = document.getElementById('isPermanent');
+        const auditHoldCheckbox = document.getElementById('auditHold');
+        const litigationHoldCheckbox = document.getElementById('litigationHold');
+
+        if (isPermanentCheckbox) isPermanentCheckbox.checked = item.retention_is_permanent || false;
+        if (auditHoldCheckbox) auditHoldCheckbox.checked = item.audit_hold_required || false;
+        if (litigationHoldCheckbox) litigationHoldCheckbox.checked = item.litigation_hold_required || false;
+
+        // Toggle retention term visibility
+        const retentionTermGroup = document.getElementById('retentionTermGroup');
+        if (retentionTermGroup) {
+            retentionTermGroup.style.display = item.retention_is_permanent ? 'none' : 'block';
+        }
+    }
+
+    createNewSchedule() {
+        this.currentSchedule = null;
+        
+        // Show only schedule section for new schedule creation
+        this.displayDetails({}, null);
+        
+        const scheduleForm = document.getElementById('scheduleForm');
+        if (scheduleForm) scheduleForm.reset();
+        
+        const deleteScheduleBtn = document.getElementById('deleteScheduleBtn');
+        const scheduleAppNumInput = document.getElementById('scheduleAppNum');
+        
+        if (deleteScheduleBtn) deleteScheduleBtn.classList.add('hidden');
+        if (scheduleAppNumInput) scheduleAppNumInput.focus();
+    }
+
+    createNewSeriesItem() {
+        console.log('createNewSeriesItem called');
+        this.currentSeriesItem = null;
+        
+        // Show only series section for new series item creation
+        this.displayDetails(null, {});
+        
+        const seriesForm = document.getElementById('seriesForm');
+        console.log('seriesForm element found:', !!seriesForm);
+        if (seriesForm) seriesForm.reset();
+        
+        const deleteSeriesBtn = document.getElementById('deleteSeriesBtn');
+        const retentionTermGroup = document.getElementById('retentionTermGroup');
+        const seriesAppNumInput = document.getElementById('seriesAppNum');
+        
+        if (deleteSeriesBtn) deleteSeriesBtn.classList.add('hidden');
+        if (retentionTermGroup) retentionTermGroup.style.display = 'block';
+        if (seriesAppNumInput) seriesAppNumInput.focus();
+    }
+
+    async handleScheduleSubmit(e) {
+        e.preventDefault();
+        
+        const schedule = {
+            application_number: document.getElementById('scheduleAppNum').value,
+            application_title: document.getElementById('scheduleTitle').value,
+            approving_body: document.getElementById('approvingBody').value,
+            approval_status: document.getElementById('approvalStatus').value,
+            approval_date: document.getElementById('approvalDate').value,
+            retention_statement_global: document.getElementById('retentionGlobal').value,
+            notes: document.getElementById('scheduleNotes').value,
+            source_pdf_name: document.getElementById('sourcePdfName').value,
+            source_pdf_url: '',
+            source_pdf_page_count: parseInt(document.getElementById('sourcePdfPages').value) || 0,
+            tags: document.getElementById('scheduleTags').value.split(',').map(t => t.trim()).filter(t => t)
+        };
+
+        try {
+            if (this.currentSchedule) {
+                schedule._id = this.currentSchedule._id;
+                schedule.version = (this.currentSchedule.version || 1) + 1;
+                await this.saveSchedule(schedule, true);
+            } else {
+                await this.saveSchedule(schedule);
+            }
+            
+            this.setStatus('Schedule saved successfully', 'success');
+            await this.updateUI();
+            this.cancelScheduleEdit();
+        } catch (error) {
+            ErrorHandler.log(error, 'Schedule save', APP_CONSTANTS.ERROR_TYPES.DATABASE);
+            this.setStatus('Error saving schedule: ' + error.message, 'error');
+        }
+    }
+
+    async handleSeriesSubmit(e) {
+        e.preventDefault();
+        console.log('handleSeriesSubmit called');
+        
+        // Validation
+        const seriesAppNumEl = document.getElementById('seriesAppNum');
+        const itemNumberEl = document.getElementById('itemNumber');
+        const seriesTitleEl = document.getElementById('seriesTitle');
+        
+        console.log('Field elements found:', {
+            seriesAppNum: !!seriesAppNumEl,
+            itemNumber: !!itemNumberEl,
+            seriesTitle: !!seriesTitleEl
+        });
+        
+        if (!seriesAppNumEl) {
+            console.error('seriesAppNum element not found');
+            this.setStatus('Form error: Application Number field not found', 'error');
+            return;
+        }
+        
+        if (!itemNumberEl) {
+            console.error('itemNumber element not found');
+            this.setStatus('Form error: Item Number field not found', 'error');
+            return;
+        }
+        
+        if (!seriesTitleEl) {
+            console.error('seriesTitle element not found');
+            this.setStatus('Form error: Series Title field not found', 'error');
+            return;
+        }
+        
+        if (!seriesAppNumEl.value.trim()) {
+            this.setStatus('Application Number is required', 'error');
+            return;
+        }
+        
+        if (!itemNumberEl.value.trim()) {
+            this.setStatus('Item Number is required', 'error');
+            return;
+        }
+        
+        if (!seriesTitleEl.value.trim()) {
+            this.setStatus('Record Series Title is required', 'error');
+            return;
+        }
+
+        const item = {
+            application_number: document.getElementById('seriesAppNum').value,
+            item_number: document.getElementById('itemNumber').value,
+            record_series_title: document.getElementById('seriesTitle').value,
+            description: document.getElementById('seriesDescription').value,
+            dates_covered_start: document.getElementById('datesStart').value,
+            dates_covered_end: document.getElementById('datesEnd').value,
+            arrangement: document.getElementById('arrangement').value,
+            volume_paper_cuft: parseFloat(document.getElementById('volumePaper').value) || 0,
+            volume_electronic_bytes: parseFloat(document.getElementById('volumeElectronic').value) || 0,
+            annual_accum_paper_cuft: parseFloat(document.getElementById('annualPaper').value) || 0,
+            annual_accum_electronic_bytes: parseFloat(document.getElementById('annualElectronic').value) || 0,
+            retention_text: document.getElementById('retentionText').value,
+            retention_trigger: document.getElementById('retentionTrigger').value,
+            retention_term: parseFloat(document.getElementById('retentionTerm').value) || null,
+            retention_is_permanent: document.getElementById('isPermanent').checked,
+            division: document.getElementById('seriesDivision').value,
+            contact: document.getElementById('seriesContact').value,
+            location: document.getElementById('seriesLocation').value,
+            representative_name: document.getElementById('representativeName').value,
+            representative_title: document.getElementById('representativeTitle').value,
+            representative_phone: document.getElementById('representativePhone').value,
+            records_officer_name: document.getElementById('recordsOfficerName').value,
+            records_officer_phone: document.getElementById('recordsOfficerPhone').value,
+            media_types: document.getElementById('mediaTypes').value,
+            electronic_records_standard: document.getElementById('electronicStandard').value,
+            number_size_files: document.getElementById('numberSizeFiles').value,
+            index_or_finding_aids: document.getElementById('indexFindingAids').value,
+            omb_or_statute_refs: document.getElementById('ombStatuteRefs').value,
+            related_series: document.getElementById('relatedSeries').value,
+            audit_hold_required: document.getElementById('auditHold').checked,
+            litigation_hold_required: document.getElementById('litigationHold').checked,
+            series_notes: document.getElementById('seriesNotes').value,
+            updated_at: new Date().toISOString()
+        };
+
+        if (this.currentSeriesItem) {
+            item._id = this.currentSeriesItem._id;
+        } else {
+            item.created_at = new Date().toISOString();
+        }
+
+        try {
+            // Check for duplicate item numbers
+            const duplicate = await this.checkDuplicateItemNumber(
+                item.application_number, 
+                item.item_number, 
+                this.currentSeriesItem?._id
+            );
+            
+            if (duplicate) {
+                const proceed = await this.showConfirmModal(
+                    'Duplicate Item Number',
+                    `Item number "${item.item_number}" already exists for application "${item.application_number}". Do you want to continue anyway?`
+                );
+                if (!proceed) return;
+            }
+
+            if (this.currentSeriesItem) {
+                await this.saveSeriesItem(item, true);
+            } else {
+                await this.saveSeriesItem(item);
+            }
+            
+            this.setStatus('Series item saved successfully', 'success');
+            await this.updateUI();
+            this.cancelSeriesEdit();
+            // Force refresh after form is closed
+            setTimeout(() => this.applyFilters(), 100);
+        } catch (error) {
+            ErrorHandler.log(error, 'Series save', APP_CONSTANTS.ERROR_TYPES.DATABASE);
+            this.setStatus('Error saving series item: ' + error.message, 'error');
+        }
+    }
+
+    cancelScheduleEdit() {
+        this.currentSchedule = null;
+        this.hideDetails();
+    }
+
+    cancelSeriesEdit() {
+        this.currentSeriesItem = null;
+        this.selectedItemId = null;
+        
+        document.querySelectorAll('.result-item').forEach(row => row.classList.remove('selected'));
+        this.hideDetails();
+    }
+
+    clearSelectionAndHideDetails() {
+        console.log('clearSelectionAndHideDetails called');
+        document.querySelectorAll('.result-item.selected').forEach(row => row.classList.remove('selected'));
+        this.selectedItemId = null;
+        this.hideDetails();
+    }
+
+    // Import/Export
+    async exportData() {
+        try {
+            const schedules = await this.getAllSchedules();
+            const seriesItems = await this.getAllSeriesItems();
+            
+            // Remove internal keys for export
+            const exportSchedules = schedules.map(s => {
+                const {_id, ...exportItem} = s;
+                return exportItem;
+            });
+            
+            const exportSeriesItems = seriesItems.map(s => {
+                const {_id, ...exportItem} = s;
+                return exportItem;
+            });
+            
+            const exportData = {
+                exported_at: new Date().toISOString(),
+                version: 1,
+                agency: {
+                    name: "Illinois Law Enforcement Training and Standards Board",
+                    abbrev: "ILETSB"
+                },
+                schedules: exportSchedules,
+                series_items: exportSeriesItems,
+                audit_events: []
+            };
+
+            const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `iletsb-records-${new Date().toISOString().split('T')[0]}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            await this.logAuditEvent('system', null, 'export', { recordCount: schedules.length + seriesItems.length });
+            this.setStatus('Data exported successfully', 'success');
+        } catch (error) {
+            ErrorHandler.log(error, 'Data export', APP_CONSTANTS.ERROR_TYPES.EXPORT);
+            this.setStatus('Error exporting data: ' + error.message, 'error');
+        }
+    }
+
+    async importData(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        try {
+            const text = await file.text();
+            const data = JSON.parse(text);
+            
+            // Validate JSON structure
+            const validation = this.validateImportData(data);
+            if (!validation.valid) {
+                throw new Error(`Invalid file format: ${validation.errors.join(', ')}`);
+            }
+
+            const results = {
+                schedules: { created: 0, updated: 0, skipped: 0, errors: [] },
+                seriesItems: { created: 0, updated: 0, skipped: 0, errors: [] }
+            };
+
+            // Import schedules with upsert logic
+            for (const schedule of data.schedules) {
+                try {
+                    const result = await this.upsertSchedule(schedule);
+                    results.schedules[result.action]++;
+                } catch (error) {
+                    results.schedules.errors.push(`Schedule ${schedule.application_number}: ${error.message}`);
+                    results.schedules.skipped++;
+                }
+            }
+
+            // Import series items with upsert logic
+            for (const item of data.series_items) {
+                try {
+                    const result = await this.upsertSeriesItem(item);
+                    results.seriesItems[result.action]++;
+                } catch (error) {
+                    results.seriesItems.errors.push(`Series ${item.application_number}-${item.item_number}: ${error.message}`);
+                    results.seriesItems.skipped++;
+                }
+            }
+
+            await this.logAuditEvent('system', null, 'import', results);
+            
+            // Show detailed import summary
+            this.showImportSummary(results);
+            await this.updateUI();
+        } catch (error) {
+            ErrorHandler.log(error, 'Data import', APP_CONSTANTS.ERROR_TYPES.IMPORT);
+            this.setStatus('Error importing data: ' + error.message, 'error');
+        }
+        
+        // Reset file input
+        event.target.value = '';
+    }
+
+    validateImportData(data) {
+        const errors = [];
+        
+        if (!data || typeof data !== 'object') {
+            errors.push('Invalid JSON structure');
+            return { valid: false, errors };
+        }
+
+        if (!data.schedules || !Array.isArray(data.schedules)) {
+            errors.push('Missing or invalid schedules array');
+        }
+
+        if (!data.series_items || !Array.isArray(data.series_items)) {
+            errors.push('Missing or invalid series_items array');
+        }
+
+        if (!data.agency || !data.agency.abbrev || data.agency.abbrev !== 'ILETSB') {
+            errors.push('Invalid agency - must be ILETSB');
+        }
+
+        // Validate required fields in schedules
+        data.schedules?.forEach((schedule, index) => {
+            if (!schedule.application_number) {
+                errors.push(`Schedule ${index + 1}: Missing application_number`);
+            }
+        });
+
+        // Validate required fields in series items
+        data.series_items?.forEach((item, index) => {
+            if (!item.application_number) {
+                errors.push(`Series item ${index + 1}: Missing application_number`);
+            }
+            if (!item.item_number) {
+                errors.push(`Series item ${index + 1}: Missing item_number`);
+            }
+            if (!item.record_series_title) {
+                errors.push(`Series item ${index + 1}: Missing record_series_title`);
+            }
+        });
+
+        return { valid: errors.length === 0, errors };
+    }
+
+    async upsertSchedule(scheduleData) {
+        if (!scheduleData.application_number) {
+            throw new Error('Missing application_number');
+        }
+
+        // Check if schedule exists
+        const existing = await this.findScheduleByApplicationNumber(scheduleData.application_number);
+        
+        const schedule = {
+            ...scheduleData,
+            updated_at: new Date().toISOString()
+        };
+
+        if (existing) {
+            // Update existing schedule
+            schedule._id = existing._id;
+            schedule.created_at = existing.created_at;
+            schedule.version = (existing.version || 1) + 1;
+            await this.saveSchedule(schedule, true);
+            return { action: 'updated' };
+        } else {
+            // Create new schedule
+            schedule.created_at = new Date().toISOString();
+            schedule.version = 1;
+            await this.saveSchedule(schedule);
+            return { action: 'created' };
+        }
+    }
+
+    async upsertSeriesItem(itemData) {
+        if (!itemData.application_number || !itemData.item_number) {
+            throw new Error('Missing application_number or item_number');
+        }
+
+        // Check if series item exists
+        const existing = await this.findSeriesItemByKey(itemData.application_number, itemData.item_number);
+        
+        const item = {
+            ...itemData,
+            updated_at: new Date().toISOString()
+        };
+
+        if (existing) {
+            // Update existing item
+            item._id = existing._id;
+            item.created_at = existing.created_at;
+            await this.saveSeriesItem(item, true);
+            return { action: 'updated' };
+        } else {
+            // Create new item
+            item.created_at = new Date().toISOString();
+            await this.saveSeriesItem(item);
+            return { action: 'created' };
+        }
+    }
+
+    async findScheduleByApplicationNumber(applicationNumber) {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['schedules'], 'readonly');
+            const store = transaction.objectStore('schedules');
+            const index = store.index('application_number');
+            const request = index.get(applicationNumber);
+
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async findSeriesItemByKey(applicationNumber, itemNumber) {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['series_items'], 'readonly');
+            const store = transaction.objectStore('series_items');
+            const request = store.getAll();
+
+            request.onsuccess = () => {
+                const items = request.result;
+                const found = items.find(item => 
+                    item.application_number === applicationNumber && 
+                    item.item_number === itemNumber
+                );
+                resolve(found);
+            };
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    showImportSummary(results) {
+        const totalSchedules = results.schedules.created + results.schedules.updated;
+        const totalSeries = results.seriesItems.created + results.seriesItems.updated;
+        const totalErrors = results.schedules.errors.length + results.seriesItems.errors.length;
+
+        let message = `Import completed: ${totalSchedules} schedules (${results.schedules.created} new, ${results.schedules.updated} updated), ${totalSeries} series items (${results.seriesItems.created} new, ${results.seriesItems.updated} updated)`;
+        
+        if (totalErrors > 0) {
+            message += `. ${totalErrors} errors occurred.`;
+            ErrorHandler.log(new Error('Import validation errors'), 'Import validation', APP_CONSTANTS.ERROR_TYPES.VALIDATION);
+        }
+
+        this.setStatus(message, totalErrors > 0 ? 'warning' : 'success');
+    }
+
+    // Enhanced UX Helper Functions
+    updateChipSelection(chipContainer, selectedValue) {
+        chipContainer.querySelectorAll('.chip').forEach(chip => {
+            chip.classList.toggle('active', chip.dataset.value === selectedValue);
+        });
+    }
+
+    handleEscapeKey() {
+        // Close admin dropdown if open
+        const adminDropdown = document.getElementById('adminDropdown');
+        if (adminDropdown && !adminDropdown.classList.contains('hidden')) {
+            this.closeAdminMenu();
+            return;
+        }
+
+        // Close modals or cancel current edit
+        const modal = document.querySelector('.modal:not(.hidden)');
+        if (modal) {
+            this.hideModal();
+        } else if (this.currentSchedule || this.currentSeriesItem) {
+            if (this.currentSchedule) {
+                this.cancelScheduleEdit();
+            } else {
+                this.cancelSeriesEdit();
+            }
+        }
+    }
+
+    // Admin dropdown helpers
+    toggleAdminMenu() {
+        const dropdown = document.getElementById('adminDropdown');
+        const adminBtn = document.getElementById('adminMenuBtn');
+        
+        if (!dropdown || !adminBtn) return;
+
+        const isHidden = dropdown.classList.contains('hidden');
+        
+        if (isHidden) {
+            dropdown.classList.remove('hidden');
+            adminBtn.setAttribute('aria-expanded', 'true');
+            // Focus first actionable item
+            const firstItem = dropdown.querySelector('.dropdown-item');
+            if (firstItem) {
+                setTimeout(() => firstItem.focus(), 100);
+            }
+        } else {
+            this.closeAdminMenu();
+        }
+    }
+
+    closeAdminMenu() {
+        const dropdown = document.getElementById('adminDropdown');
+        const adminBtn = document.getElementById('adminMenuBtn');
+        if (!dropdown || !adminBtn) return;
+        
+        dropdown.classList.add('hidden');
+        adminBtn.setAttribute('aria-expanded', 'false');
+        adminBtn.focus(); // Return focus to button
+    }
+
+    setupAdminMenu() {
+        const adminBtn = document.getElementById('adminMenuBtn');
+        const clearDbBtn = document.getElementById('clearDbBtn');
+        
+        if (adminBtn) {
+            adminBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.toggleAdminMenu();
+            });
+        }
+        
+        if (clearDbBtn) {
+            clearDbBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.showModal(
+                    'Clear Database',
+                    'This will permanently delete all local data (schedules, series items, and audit events). This action cannot be undone. Are you sure you want to continue?',
+                    () => this.clearDatabase()
+                );
+            });
+        }
+    }
+
+    handleGlobalClick(e) {
+        const dropdown = document.getElementById('adminDropdown');
+        const adminMenu = document.getElementById('adminMenu');
+        
+        if (!dropdown || dropdown.classList.contains('hidden')) return;
+
+        // Close if click is outside admin menu area
+        if (!adminMenu.contains(e.target)) {
+            this.closeAdminMenu();
+        }
+    }
+
+    async clearDatabase() {
+        try {
+            this.setStatus('Clearing database...', 'warning');
+
+            // Close any open connections
+            if (this.db) {
+                try { this.db.close(); } catch {}
+            }
+
+            let deleteSucceeded = false;
+            await new Promise((resolve, reject) => {
+                const deleteRequest = indexedDB.deleteDatabase(this.dbName);
+                deleteRequest.onerror = () => reject(deleteRequest.error || new Error('Failed to delete database'));
+                deleteRequest.onblocked = () => {
+                    // Advise user if multiple tabs are open
+                    this.setStatus('Database deletion is blocked. Close other tabs of this app and try again.', 'error');
+                    reject(new Error('Deletion blocked'));
+                };
+                deleteRequest.onsuccess = () => { deleteSucceeded = true; resolve(); };
+            });
+
+            // Reset in-memory state
+            this.db = null;
+            this.schedules = [];
+            this.seriesItems = [];
+            this.filteredItems = [];
+            this.currentSchedule = null;
+            this.currentSeriesItem = null;
+            this.selectedItemId = null;
+            this.virtualScroller = null;
+
+            // Recreate empty DB schema
+            await this.initDatabase();
+
+            // Force-clear all stores for absolute certainty
+            await new Promise((resolve, reject) => {
+                const tx = this.db.transaction(['schedules','series_items','audit_events'], 'readwrite');
+                tx.objectStore('schedules').clear();
+                tx.objectStore('series_items').clear();
+                tx.objectStore('audit_events').clear();
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error || new Error('Failed to clear stores'));
+            });
+
+            // Reset UI without calling updateUI() which would reload sample data
+            this.clearFilters();
+            // Clear results pane DOM immediately to avoid stale rows
+            const resultsList = document.getElementById('resultsList');
+            if (resultsList) {
+                resultsList.scrollTop = 0;
+                DOMHelper.clearElement(resultsList);
+                const emptyState = document.getElementById('emptyState');
+                if (emptyState) resultsList.appendChild(emptyState);
+            }
+            this.cancelScheduleEdit();
+            this.cancelSeriesEdit();
+            
+            // Manually update UI components without loading sample data
+            this.populateFilterDropdowns();
+            this.updateResultsSummary();
+            this.updateRecordCount();
+
+            this.setStatus('Database cleared successfully', 'success');
+            this.closeAdminMenu();
+        } catch (error) {
+            ErrorHandler.log(error, 'Clear database', APP_CONSTANTS.ERROR_TYPES.DATABASE);
+            this.setStatus('Error clearing database: ' + (error.message || error), 'error');
+        }
+    }
+
+    handleSaveShortcut() {
+        // Save current form if editing
+        const scheduleForm = document.getElementById('scheduleForm');
+        const seriesForm = document.getElementById('seriesForm');
+        
+        if (scheduleForm && !scheduleForm.classList.contains('hidden')) {
+            scheduleForm.dispatchEvent(new Event('submit'));
+        } else if (seriesForm && !seriesForm.classList.contains('hidden')) {
+            seriesForm.dispatchEvent(new Event('submit'));
+        }
+    }
+
+    validateField(field) {
+        this.clearFieldError(field);
+        
+        const fieldType = field.type;
+        const fieldId = field.id;
+        const value = field.value.trim();
+        
+        // Required field validation
+        if (field.hasAttribute('required') && !value) {
+            this.showFieldError(field, 'This field is required');
+            return false;
+        }
+
+        // Date validation
+        if (fieldType === 'date' && value) {
+            const date = new Date(value);
+            if (isNaN(date.getTime())) {
+                this.showFieldError(field, 'Please enter a valid date');
+                return false;
+            }
+        }
+
+        // Year validation for coverage dates
+        if ((fieldId === 'datesCoveredStart' || fieldId === 'datesCoveredEnd') && value) {
+            if (!/^\d{4}$/.test(value) && value.toLowerCase() !== 'present') {
+                this.showFieldError(field, 'Please enter a 4-digit year or "present"');
+                return false;
+            }
+            
+            const year = parseInt(value);
+            if (!isNaN(year) && (year < 1800 || year > new Date().getFullYear() + 10)) {
+                this.showFieldError(field, 'Please enter a reasonable year');
+                return false;
+            }
+        }
+
+        // Phone number validation
+        if (fieldType === 'tel' && value) {
+            const phoneRegex = /^\(?([0-9]{3})\)?[-. ]?([0-9]{3})[-. ]?([0-9]{4})$/;
+            if (!phoneRegex.test(value)) {
+                this.showFieldError(field, 'Please enter a valid phone number (e.g., 555-123-4567)');
+                return false;
+            }
+        }
+
+        // Number validation
+        if (fieldType === 'number' && value) {
+            const num = parseFloat(value);
+            if (isNaN(num) || num < 0) {
+                this.showFieldError(field, 'Please enter a valid positive number');
+                return false;
+            }
+        }
+
+        // Retention logic validation
+        if (fieldId === 'retentionTerm') {
+            const isPermanent = document.getElementById('retentionIsPermanent')?.checked;
+            if (isPermanent && value) {
+                this.showFieldError(field, 'Retention term should be empty for permanent records');
+                return false;
+            }
+            if (!isPermanent && !value) {
+                this.showFieldError(field, 'Retention term is required for non-permanent records');
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    showFieldError(field, message) {
+        field.classList.add('error');
+        
+        // Remove existing error message
+        const existingError = field.parentElement.querySelector('.form-validation-error');
+        if (existingError) {
+            existingError.remove();
+        }
+        
+        // Add new error message
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'form-validation-error';
+        errorDiv.textContent = message;
+        field.parentElement.appendChild(errorDiv);
+    }
+
+    clearFieldError(field) {
+        field.classList.remove('error');
+        const errorDiv = field.parentElement.querySelector('.form-validation-error');
+        if (errorDiv) {
+            errorDiv.remove();
+        }
+    }
+
+    validateForm(formId) {
+        const form = document.getElementById(formId);
+        if (!form) return true;
+        
+        let isValid = true;
+        const fields = form.querySelectorAll('.form-control');
+        
+        fields.forEach(field => {
+            if (!this.validateField(field)) {
+                isValid = false;
+            }
+        });
+        
+        return isValid;
+    }
+
+    // Enhanced number formatting
+    formatNumber(value, stripCommas = true) {
+        if (!value) return value;
+        
+        let numStr = value.toString();
+        if (stripCommas) {
+            numStr = numStr.replace(/,/g, '');
+        }
+        
+        const num = parseFloat(numStr);
+        return isNaN(num) ? value : num;
+    }
+
+    // Byte size display helper
+    formatBytes(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    // CSV Import Functions
+    async handleCsvFile(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        try {
+            const text = await file.text();
+            const csvData = this.parseCSV(text);
+            
+            if (csvData.length < 2) {
+                throw new Error('CSV file must contain at least a header row and one data row');
+            }
+
+            this.csvData = csvData;
+            this.showCsvImportModal(csvData);
+        } catch (error) {
+            ErrorHandler.log(error, 'CSV parsing', APP_CONSTANTS.ERROR_TYPES.IMPORT);
+            this.setStatus('Error reading CSV file: ' + error.message, 'error');
+        }
+        
+        // Reset file input
+        event.target.value = '';
+    }
+
+    parseCSV(text) {
+        const lines = text.split('\n').map(line => line.trim()).filter(line => line);
+        const result = [];
+        
+        for (const line of lines) {
+            const row = [];
+            let current = '';
+            let inQuotes = false;
+            
+            for (let i = 0; i < line.length; i++) {
+                const char = line[i];
+                
+                if (char === '"') {
+                    inQuotes = !inQuotes;
+                } else if (char === ',' && !inQuotes) {
+                    row.push(current.trim());
+                    current = '';
+                } else {
+                    current += char;
+                }
+            }
+            
+            row.push(current.trim());
+            result.push(row);
+        }
+        
+        return result;
+    }
+
+    showCsvImportModal(csvData) {
+        const modal = document.getElementById('csvImportModal');
+        const preview = document.getElementById('csvPreview');
+        const mapping = document.getElementById('columnMapping');
+        
+        // Show preview of first 5 rows
+        const previewData = csvData.slice(0, 5);
+        DOMHelper.clearElement(preview);
+        preview.appendChild(this.createCsvPreviewTable(previewData));
+        
+        // Create column mapping controls
+        DOMHelper.clearElement(mapping);
+        mapping.appendChild(this.createColumnMappingControls(csvData[0]));
+        
+        modal.classList.remove('hidden');
+    }
+
+    createCsvPreviewTable(data) {
+        if (data.length === 0) {
+            const p = document.createElement('p');
+            p.textContent = 'No data to preview';
+            return p;
+        }
+        
+        const table = document.createElement('table');
+        const thead = document.createElement('thead');
+        const tbody = document.createElement('tbody');
+        
+        // Create header row
+        const headerRow = document.createElement('tr');
+        data[0].forEach((header, index) => {
+            const th = document.createElement('th');
+            DOMHelper.setTextContent(th, `Column ${index + 1}: ${header}`);
+            headerRow.appendChild(th);
+        });
+        thead.appendChild(headerRow);
+        
+        // Create data rows
+        for (let i = 1; i < data.length; i++) {
+            const row = document.createElement('tr');
+            data[i].forEach(cell => {
+                const td = document.createElement('td');
+                DOMHelper.setTextContent(td, cell || '');
+                row.appendChild(td);
+            });
+            tbody.appendChild(row);
+        }
+        
+        table.appendChild(thead);
+        table.appendChild(tbody);
+        return table;
+    }
+
+    createColumnMappingControls(headers) {
+        const seriesFields = [
+            { key: '', label: '-- Skip Column --' },
+            { key: 'application_number', label: 'Application Number *' },
+            { key: 'item_number', label: 'Item Number *' },
+            { key: 'record_series_title', label: 'Record Series Title *' },
+            { key: 'description', label: 'Description' },
+            { key: 'dates_covered_start', label: 'Dates Covered Start' },
+            { key: 'dates_covered_end', label: 'Dates Covered End' },
+            { key: 'arrangement', label: 'Arrangement' },
+            { key: 'volume_paper_cuft', label: 'Paper Volume (cu ft)' },
+            { key: 'volume_electronic_bytes', label: 'Electronic Volume (bytes)' },
+            { key: 'annual_accum_paper_cuft', label: 'Annual Paper (cu ft)' },
+            { key: 'annual_accum_electronic_bytes', label: 'Annual Electronic (bytes)' },
+            { key: 'retention_text', label: 'Retention Text' },
+            { key: 'retention_trigger', label: 'Retention Trigger' },
+            { key: 'retention_term', label: 'Retention Term (years)' },
+            { key: 'retention_is_permanent', label: 'Is Permanent (true/false)' },
+            { key: 'division', label: 'Division' },
+            { key: 'contact', label: 'Contact' },
+            { key: 'location', label: 'Location' },
+            { key: 'representative_name', label: 'Representative Name' },
+            { key: 'representative_title', label: 'Representative Title' },
+            { key: 'representative_phone', label: 'Representative Phone' },
+            { key: 'records_officer_name', label: 'Records Officer Name' },
+            { key: 'records_officer_phone', label: 'Records Officer Phone' },
+            { key: 'media_types', label: 'Media Types' },
+            { key: 'series_notes', label: 'Series Notes' }
+        ];
+
+        const container = document.createElement('div');
+        
+        headers.forEach((header, index) => {
+            const mappingRow = document.createElement('div');
+            mappingRow.className = 'mapping-row';
+            
+            const label = document.createElement('label');
+            DOMHelper.setTextContent(label, `CSV Column: "${header}"`);
+            
+            const select = document.createElement('select');
+            select.className = 'column-mapping-select';
+            select.dataset.column = index;
+            select.id = `mapping_${index}`;
+            
+            seriesFields.forEach(field => {
+                select.appendChild(DOMHelper.createOption(field.key, field.label));
+            });
+            
+            mappingRow.appendChild(label);
+            mappingRow.appendChild(select);
+            container.appendChild(mappingRow);
+        });
+        
+        return container;
+    }
+
+    async processCsvImport() {
+        try {
+            const headers = this.csvData[0];
+            const mapping = {};
+            
+            // Build mapping from CSV columns to database fields
+            headers.forEach((header, index) => {
+                const select = document.getElementById(`mapping_${index}`);
+                if (select && select.value) {
+                    mapping[index] = select.value;
+                }
+            });
+
+            // Validate required fields are mapped
+            const requiredFields = ['application_number', 'item_number', 'record_series_title'];
+            const mappedFields = Object.values(mapping);
+            const missingRequired = requiredFields.filter(field => !mappedFields.includes(field));
+            
+            if (missingRequired.length > 0) {
+                throw new Error(`Required fields not mapped: ${missingRequired.join(', ')}`);
+            }
+
+            const results = {
+                created: 0,
+                updated: 0,
+                skipped: 0,
+                errors: []
+            };
+
+            // Process each data row
+            for (let i = 1; i < this.csvData.length; i++) {
+                try {
+                    const row = this.csvData[i];
+                    const item = this.mapCsvRowToItem(row, mapping);
+                    
+                    if (item.application_number && item.item_number && item.record_series_title) {
+                        const result = await this.upsertSeriesItem(item);
+                        results[result.action]++;
+                    } else {
+                        results.skipped++;
+                        results.errors.push(`Row ${i + 1}: Missing required fields`);
+                    }
+                } catch (error) {
+                    results.skipped++;
+                    results.errors.push(`Row ${i + 1}: ${error.message}`);
+                }
+            }
+
+            await this.logAuditEvent('system', null, 'csv_import', results);
+            
+            this.hideCsvModal();
+            this.showCsvImportSummary(results);
+            await this.updateUI();
+        } catch (error) {
+            ErrorHandler.log(error, 'CSV import', APP_CONSTANTS.ERROR_TYPES.IMPORT);
+            this.setStatus('Error importing CSV: ' + error.message, 'error');
+        }
+    }
+
+    mapCsvRowToItem(row, mapping) {
+        const item = {
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+        };
+
+        Object.entries(mapping).forEach(([csvIndex, fieldName]) => {
+            const value = row[parseInt(csvIndex)]?.trim();
+            if (value) {
+                // Type conversion based on field
+                if (fieldName.includes('volume') || fieldName.includes('term')) {
+                    item[fieldName] = parseFloat(value) || 0;
+                } else if (fieldName === 'retention_is_permanent') {
+                    item[fieldName] = value.toLowerCase() === 'true' || value === '1';
+                } else if (fieldName.includes('hold_required')) {
+                    item[fieldName] = value.toLowerCase() === 'true' || value === '1';
+                } else {
+                    item[fieldName] = value;
+                }
+            }
+        });
+
+        return item;
+    }
+
+    hideCsvModal() {
+        const modal = document.getElementById('csvImportModal');
+        modal.classList.add('hidden');
+        this.csvData = null;
+    }
+
+    showCsvImportSummary(results) {
+        const total = results.created + results.updated;
+        let message = `CSV import completed: ${total} series items (${results.created} new, ${results.updated} updated)`;
+        
+        if (results.skipped > 0) {
+            message += `, ${results.skipped} skipped`;
+        }
+        
+        if (results.errors.length > 0) {
+            message += `. ${results.errors.length} errors occurred.`;
+            ErrorHandler.log(new Error('CSV import validation errors'), 'CSV import validation', APP_CONSTANTS.ERROR_TYPES.VALIDATION);
+        }
+
+        this.setStatus(message, results.errors.length > 0 ? 'warning' : 'success');
+    }
+
+    // Quality Control Features
+    async checkDuplicateItemNumber(applicationNumber, itemNumber, excludeId = null) {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['series_items'], 'readonly');
+            const store = transaction.objectStore('series_items');
+            const request = store.openCursor();
+            
+            let found = null;
+            
+            request.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (cursor) {
+                    const item = cursor.value;
+                    if (item.application_number === applicationNumber && 
+                        item.item_number === itemNumber &&
+                        cursor.key !== excludeId) {
+                        found = { ...item, _id: cursor.key };
+                        resolve(found);
+                        return;
+                    }
+                    cursor.continue();
+                } else {
+                    resolve(null);
+                }
+            };
+            
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    flagRetentionKeywords(retentionText) {
+        if (!retentionText) return [];
+        
+        const keywords = {
+            audit: ['audit', 'auditing', 'audited', 'audit hold'],
+            litigation: ['litigation', 'legal hold', 'lawsuit', 'court', 'legal action'],
+            compliance: ['compliance', 'regulatory', 'regulation', 'statute', 'law'],
+            destruction: ['destroy', 'destruction', 'dispose', 'disposal', 'shred']
+        };
+        
+        const flags = [];
+        const text = retentionText.toLowerCase();
+        
+        Object.entries(keywords).forEach(([category, terms]) => {
+            if (terms.some(term => text.includes(term))) {
+                flags.push(category);
+            }
+        });
+        
+        return flags;
+    }
+
+    calculateDataCompleteness(item) {
+        const requiredFields = ['application_number', 'item_number', 'record_series_title'];
+        const importantFields = [
+            'description', 'dates_covered_start', 'dates_covered_end', 
+            'retention_text', 'division', 'contact', 'location'
+        ];
+        const optionalFields = [
+            'arrangement', 'volume_paper_cuft', 'volume_electronic_bytes',
+            'representative_name', 'records_officer_name', 'media_types'
+        ];
+        
+        let score = 0;
+        let maxScore = 0;
+        
+        // Required fields (40% weight)
+        requiredFields.forEach(field => {
+            maxScore += 40;
+            if (item[field] && item[field].toString().trim()) {
+                score += 40;
+            }
+        });
+        
+        // Important fields (35% weight)
+        importantFields.forEach(field => {
+            maxScore += 5;
+            if (item[field] && item[field].toString().trim()) {
+                score += 5;
+            }
+        });
+        
+        // Optional fields (25% weight)
+        optionalFields.forEach(field => {
+            maxScore += 2.5;
+            if (item[field] && item[field].toString().trim()) {
+                score += 2.5;
+            }
+        });
+        
+        return Math.round((score / maxScore) * 100);
+    }
+
+    getCompletenessLevel(percentage) {
+        if (percentage >= 90) return { level: 'excellent', color: 'green' };
+        if (percentage >= 75) return { level: 'good', color: 'blue' };
+        if (percentage >= 60) return { level: 'fair', color: 'orange' };
+        return { level: 'poor', color: 'red' };
+    }
+
+    addQualityIndicators(item) {
+        const indicators = {
+            completeness: this.calculateDataCompleteness(item),
+            retentionFlags: this.flagRetentionKeywords(item.retention_text),
+            hasAuditHold: item.audit_hold_required,
+            hasLitigationHold: item.litigation_hold_required,
+            isPermanent: item.retention_is_permanent
+        };
+        
+        return { ...item, qualityIndicators: indicators };
+    }
+
+    async showConfirmModal(title, message) {
+        return new Promise((resolve) => {
+            this.showModal(title, message, () => resolve(true), () => resolve(false));
+        });
+    }
+
+    // Reporting and Export Enhancements
+    async printReport() {
+        try {
+            const filteredItems = await this.getFilteredItems();
+            const reportHtml = this.generateReportHtml(filteredItems);
+            
+            // Create a new window for printing
+            const printWindow = window.open('', '_blank');
+            printWindow.document.write(reportHtml);
+            printWindow.document.close();
+            
+            // Wait for content to load then print
+            printWindow.onload = () => {
+                printWindow.print();
+                printWindow.close();
+            };
+        } catch (error) {
+            ErrorHandler.log(error, 'Print report', APP_CONSTANTS.ERROR_TYPES.EXPORT);
+            this.setStatus('Error generating print report: ' + error.message, 'error');
+        }
+    }
+
+    async exportFilteredData() {
+        try {
+            const filteredItems = await this.getFilteredItems();
+            const allSchedules = await this.getAllSchedules();
+            const relatedScheduleNumbers = [...new Set(filteredItems.map(item => item.application_number))];
+            const relatedSchedules = allSchedules.filter(schedule => relatedScheduleNumbers.includes(schedule.application_number));
+
+            const exportData = {
+                metadata: {
+                    exported_at: new Date().toISOString(),
+                    total_schedules: relatedSchedules.length,
+                    total_series_items: filteredItems.length,
+                    filters_applied: this.getActiveFilters()
+                },
+                schedules: relatedSchedules,
+                series_items: filteredItems
+            };
+
+            const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `iletsb_filtered_export_${new Date().toISOString().split('T')[0]}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+
+            this.setStatus(`Exported ${filteredItems.length} filtered items`, 'success');
+        } catch (error) {
+            ErrorHandler.log(error, 'Export filtered data', APP_CONSTANTS.ERROR_TYPES.EXPORT);
+            this.setStatus('Error exporting filtered data: ' + error.message, 'error');
+        }
+    }
+
+    async getFilteredItems() {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['series_items'], 'readonly');
+            const store = transaction.objectStore('series_items');
+            const request = store.openCursor();
+            const items = [];
+
+            request.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (cursor) {
+                    const item = { ...cursor.value, _id: cursor.key };
+                    if (this.matchesCurrentFilters(item)) {
+                        items.push(item);
+                    }
+                    cursor.continue();
+                } else {
+                    resolve(items);
+                }
+            };
+
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    getActiveFilters() {
+        const filters = {};
+        
+        const searchInput = document.getElementById('searchInput')?.value;
+        if (searchInput) filters.search = searchInput;
+        
+        const applicationFilter = document.getElementById('applicationFilter')?.value;
+        if (applicationFilter) filters.application = applicationFilter;
+        
+        const divisionFilter = document.getElementById('divisionFilter')?.value;
+        if (divisionFilter) filters.division = divisionFilter;
+        
+        const statusFilter = document.getElementById('statusFilter')?.value;
+        if (statusFilter) filters.status = statusFilter;
+        
+        const retentionCategoryFilter = document.getElementById('retentionCategoryFilter')?.value;
+        if (retentionCategoryFilter) filters.retentionCategory = retentionCategoryFilter;
+        
+        const approvalDateStart = document.getElementById('approvalDateStart')?.value;
+        const approvalDateEnd = document.getElementById('approvalDateEnd')?.value;
+        if (approvalDateStart || approvalDateEnd) {
+            filters.approvalDateRange = { start: approvalDateStart, end: approvalDateEnd };
+        }
+        
+        const coverageDateStart = document.getElementById('coverageDateStart')?.value;
+        const coverageDateEnd = document.getElementById('coverageDateEnd')?.value;
+        if (coverageDateStart || coverageDateEnd) {
+            filters.coverageDateRange = { start: coverageDateStart, end: coverageDateEnd };
+        }
+
+        return filters;
+    }
+
+    generateReportHtml(items) {
+        const activeFilters = this.getActiveFilters();
+        const filterSummary = Object.keys(activeFilters).length > 0 
+            ? Object.entries(activeFilters).map(([key, value]) => 
+                `<li><strong>${key}:</strong> ${typeof value === 'object' ? JSON.stringify(value) : value}</li>`
+              ).join('')
+            : '<li>No filters applied</li>';
+
+        const itemRows = items.map(item => {
+            const itemWithQuality = this.addQualityIndicators(item);
+            const completeness = itemWithQuality.qualityIndicators.completeness;
+            const retentionFlags = itemWithQuality.qualityIndicators.retentionFlags;
+            const schedule = this.schedules.find(s => s.application_number === item.application_number);
+            const approvalStatus = schedule ? (schedule.approval_status || 'Unapproved') : 'Unapproved';
+
+            return `
+                <tr>
+                    <td>${item.application_number || 'N/A'}</td>
+                    <td>${item.item_number || 'N/A'}</td>
+                    <td>${item.record_series_title || 'Untitled'}</td>
+                    <td>${approvalStatus}</td>
+                    <td>${item.division || 'N/A'}</td>
+                    <td>${item.retention_is_permanent ? 'Permanent' : (item.retention_term ? `${item.retention_term} years` : 'Not specified')}</td>
+                    <td>${this.formatDateRange(item.dates_covered_start, item.dates_covered_end)}</td>
+                    <td>${completeness}%</td>
+                    <td>${retentionFlags.join(', ') || 'None'}</td>
+                </tr>
+            `;
+        }).join('');
+
+        return `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>ILETSB Records Retention Inventory Report</title>
+                <style>
+                    body { 
+                        font-family: Arial, sans-serif; 
+                        margin: 20px; 
+                        font-size: 12px;
+                        line-height: 1.4;
+                    }
+                    .header { 
+                        text-align: center; 
+                        margin-bottom: 30px; 
+                        border-bottom: 2px solid #333;
+                        padding-bottom: 15px;
+                    }
+                    .header h1 { 
+                        margin: 0; 
+                        color: #333; 
+                        font-size: 24px;
+                    }
+                    .header .subtitle { 
+                        color: #666; 
+                        margin-top: 5px;
+                        font-size: 14px;
+                    }
+                    .summary { 
+                        margin-bottom: 20px; 
+                        background: #f5f5f5; 
+                        padding: 15px; 
+                        border-radius: 5px;
+                    }
+                    .summary h3 { 
+                        margin-top: 0; 
+                        color: #333;
+                    }
+                    .summary ul { 
+                        margin: 10px 0; 
+                        padding-left: 20px;
+                    }
+                    table { 
+                        width: 100%; 
+                        border-collapse: collapse; 
+                        margin-top: 15px;
+                    }
+                    th, td { 
+                        border: 1px solid #ddd; 
+                        padding: 8px; 
+                        text-align: left; 
+                        font-size: 11px;
+                    }
+                    th { 
+                        background-color: #f2f2f2; 
+                        font-weight: bold;
+                    }
+                    tr:nth-child(even) { 
+                        background-color: #f9f9f9; 
+                    }
+                    .footer { 
+                        margin-top: 30px; 
+                        text-align: center; 
+                        color: #666; 
+                        font-size: 10px;
+                        border-top: 1px solid #ddd;
+                        padding-top: 15px;
+                    }
+                    @media print {
+                        body { margin: 0; }
+                        .header { page-break-after: avoid; }
+                        table { page-break-inside: avoid; }
+                        tr { page-break-inside: avoid; }
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <h1>Illinois Law Enforcement Training & Standards Board</h1>
+                    <div class="subtitle">Records Retention Inventory Report</div>
+                    <div class="subtitle">Generated on ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}</div>
+                </div>
+
+                <div class="summary">
+                    <h3>Report Summary</h3>
+                    <p><strong>Total Records:</strong> ${items.length}</p>
+                    <h4>Active Filters:</h4>
+                    <ul>${filterSummary}</ul>
+                </div>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>App #</th>
+                            <th>Item #</th>
+                            <th>Record Series Title</th>
+                            <th>Approval Status</th>
+                            <th>Division</th>
+                            <th>Retention</th>
+                            <th>Dates Covered</th>
+                            <th>Completeness</th>
+                            <th>Flags</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${itemRows}
+                    </tbody>
+                </table>
+
+                <div class="footer">
+                    <p>This report was generated by the ILETSB Records Retention Inventory system.</p>
+                    <p>For questions or corrections, please contact the Records Management Office.</p>
+                </div>
+            </body>
+            </html>
+        `;
+    }
+
+    // Delete Confirmations
+    confirmDeleteSchedule() {
+        this.showModal('Delete Schedule', 'Are you sure you want to delete this schedule? This action cannot be undone.', () => {
+            this.deleteCurrentSchedule();
+        });
+    }
+
+    confirmDeleteSeriesItem() {
+        this.showModal('Delete Series Item', 'Are you sure you want to delete this series item? This action cannot be undone.', () => {
+            this.deleteCurrentSeriesItem();
+        });
+    }
+
+    async deleteCurrentSchedule() {
+        if (!this.currentSchedule) return;
+        
+        try {
+            await this.deleteSchedule(this.currentSchedule._id);
+            this.setStatus('Schedule deleted successfully', 'success');
+            await this.updateUI();
+            this.cancelScheduleEdit();
+        } catch (error) {
+            ErrorHandler.log(error, 'Delete schedule', APP_CONSTANTS.ERROR_TYPES.DATABASE);
+            this.setStatus('Error deleting schedule: ' + error.message, 'error');
+        }
+    }
+
+    async deleteCurrentSeriesItem() {
+        if (!this.currentSeriesItem) return;
+        
+        try {
+            await this.deleteSeriesItem(this.currentSeriesItem._id);
+            this.setStatus('Series item deleted successfully', 'success');
+            await this.updateUI();
+            this.cancelSeriesEdit();
+        } catch (error) {
+            ErrorHandler.log(error, 'Delete series item', APP_CONSTANTS.ERROR_TYPES.DATABASE);
+            this.setStatus('Error deleting series item: ' + error.message, 'error');
+        }
+    }
+
+    // Modal Management
+    showModal(title, message, confirmCallback) {
+        const modal = document.getElementById('confirmModal');
+        const titleElement = document.getElementById('confirmTitle');
+        const messageElement = document.getElementById('confirmMessage');
+        const confirmBtn = document.getElementById('confirmBtn');
+
+        if (titleElement) titleElement.textContent = title;
+        if (messageElement) messageElement.textContent = message;
+        if (modal) modal.classList.remove('hidden');
+        
+        this.confirmCallback = confirmCallback;
+        
+        if (confirmBtn) confirmBtn.focus();
+    }
+
+    hideModal() {
+        const modal = document.getElementById('confirmModal');
+        if (modal) modal.classList.add('hidden');
+        this.confirmCallback = null;
+    }
+
+    handleConfirm() {
+        if (this.confirmCallback) {
+            this.confirmCallback();
+        }
+        this.hideModal();
+    }
+
+    // Utility Methods
+    formatDateRange(startDate, endDate) {
+        if (!startDate && !endDate) return 'No dates specified';
+        if (!startDate) return `Through ${endDate}`;
+        if (!endDate) return `${startDate} - present`;
+        if (startDate === endDate) return startDate;
+        return `${startDate} - ${endDate}`;
+    }
+
+    setStatus(message, type = 'info') {
+        const statusEl = document.getElementById('statusMessage');
+        if (!statusEl) return;
+        
+        statusEl.textContent = message;
+        statusEl.className = type === 'error' ? 'status--error' : type === 'success' ? 'status--success' : '';
+        
+        if (type === 'success' || type === 'error') {
+            setTimeout(() => {
+                statusEl.textContent = 'Ready';
+                statusEl.className = '';
+            }, 3000);
+        }
+    }
+
+    toggleSearchPane() {
+        const searchPane = document.getElementById('searchPane');
+        const mainContent = document.querySelector('.main-content');
+        const toggleBtn = document.getElementById('searchToggleBtn');
+        
+        if (!searchPane || !mainContent || !toggleBtn) return;
+        
+        const isCollapsed = searchPane.classList.contains('collapsed');
+        
+        if (isCollapsed) {
+            // Expand
+            searchPane.classList.remove('collapsed');
+            mainContent.classList.remove('search-collapsed');
+            toggleBtn.setAttribute('aria-expanded', 'true');
+        } else {
+            // Collapse
+            searchPane.classList.add('collapsed');
+            mainContent.classList.add('search-collapsed');
+            toggleBtn.setAttribute('aria-expanded', 'false');
+        }
+        
+        // Store preference in localStorage
+        localStorage.setItem('iletsb_search_pane_collapsed', !isCollapsed);
+    }
+
+    restoreSearchPaneState() {
+        const isCollapsed = localStorage.getItem('iletsb_search_pane_collapsed') === 'true';
+        
+        if (isCollapsed) {
+            const searchPane = document.getElementById('searchPane');
+            const mainContent = document.querySelector('.main-content');
+            const toggleBtn = document.getElementById('searchToggleBtn');
+            
+            if (searchPane && mainContent && toggleBtn) {
+                searchPane.classList.add('collapsed');
+                mainContent.classList.add('search-collapsed');
+                toggleBtn.setAttribute('aria-expanded', 'false');
+            }
+        }
+    }
+
+    handleKeydown(event) {
+        if (event.key === 'Escape') {
+            const modal = document.getElementById('confirmModal');
+            if (modal && !modal.classList.contains('hidden')) {
+                this.hideModal();
+                return;
+            }
+            
+            // Cancel current edit
+            const scheduleForm = document.getElementById('scheduleForm');
+            const seriesForm = document.getElementById('seriesForm');
+            
+            if (scheduleForm && !scheduleForm.classList.contains('hidden')) {
+                this.cancelScheduleEdit();
+            } else if (seriesForm && !seriesForm.classList.contains('hidden')) {
+                this.cancelSeriesEdit();
+            }
+        }
+    }
+}
+
+// Global error handlers
+window.addEventListener('unhandledrejection', (event) => {
+    ErrorHandler.log(event.reason, 'Unhandled Promise Rejection', APP_CONSTANTS.ERROR_TYPES.DATABASE);
+    event.preventDefault(); // Prevent default browser error handling
+});
+
+window.addEventListener('error', (event) => {
+    ErrorHandler.log(event.error, 'Global Error', APP_CONSTANTS.ERROR_TYPES.DATABASE);
+});
+
+// Initialize the application when DOM is loaded
+document.addEventListener('DOMContentLoaded', () => {
+    new ILETSBApp();
+});
