@@ -26,8 +26,7 @@ const APP_CONSTANTS = {
         DRAFT: 'draft',
         PENDING: 'pending',
         APPROVED: 'approved',
-        SUPERCEDED: 'superseded',
-        DENIED: 'denied'
+        SUPERCEDED: 'superseded'
     }
 };
 
@@ -40,8 +39,8 @@ class ErrorHandler {
             timestamp: new Date().toISOString(),
             type,
             context,
-            message: error.message || error,
-            stack: error.stack
+            message: error && error.message ? error.message : (error || 'Unknown error'),
+            stack: error && error.stack ? error.stack : undefined
         };
         
         // Store error in localStorage for debugging
@@ -136,7 +135,7 @@ class ILETSBApp {
     constructor() {
         this.db = null;
         this.dbName = APP_CONSTANTS.DB_NAME;
-        this.dbVersion = APP_CONSTANTS.DB_VERSION;
+        this.dbVersion = 3; // Increment for merged model
         this.currentSchedule = null;
         this.currentSeriesItem = null;
         this.searchTimeout = null;
@@ -177,45 +176,49 @@ class ILETSBApp {
                 const db = event.target.result;
                 const oldVersion = event.oldVersion;
 
-                // Create schedules object store
-                if (!db.objectStoreNames.contains('schedules')) {
-                    const scheduleStore = db.createObjectStore('schedules', { autoIncrement: true });
-                    scheduleStore.createIndex('schedule_number', 'schedule_number', { unique: true });
-                    scheduleStore.createIndex('approval_status', 'approval_status', { unique: false });
-                    scheduleStore.createIndex('approval_date', 'approval_date', { unique: false });
-                } else if (oldVersion < 2) {
-                    // Migration for existing schedules store
-                    const transaction = event.target.transaction;
-                    const scheduleStore = transaction.objectStore('schedules');
+                // Migration to merged series model (v3)
+                if (oldVersion < 3) {
+                    // Remove old schedules table if it exists
+                    if (db.objectStoreNames.contains('schedules')) {
+                        db.deleteObjectStore('schedules');
+                    }
                     
-                    // Remove old indices
-                    try { scheduleStore.deleteIndex('schedule_number'); } catch (e) {}
-                    
-                    // Add new indices
-                    try { scheduleStore.createIndex('schedule_number', 'schedule_number', { unique: true }); } catch (e) {}
+                    // Rename series_items to series and update schema
+                    if (db.objectStoreNames.contains('series_items')) {
+                        db.deleteObjectStore('series_items');
+                    }
                 }
 
-                // Create series_items object store
-                if (!db.objectStoreNames.contains('series_items')) {
-                    const seriesStore = db.createObjectStore('series_items', { autoIncrement: true });
-                    seriesStore.createIndex('schedule_id', 'schedule_id', { unique: false });
-                    seriesStore.createIndex('schedule_item', ['schedule_id', 'item_number'], { unique: true });
+                // Create new merged series object store
+                if (!db.objectStoreNames.contains('series')) {
+                    const seriesStore = db.createObjectStore('series', { keyPath: '_id', autoIncrement: true });
+                    seriesStore.createIndex('application_number_item_number', ['application_number', 'item_number'], { unique: false });
+                    seriesStore.createIndex('record_series_title', 'record_series_title', { unique: false });
                     seriesStore.createIndex('division', 'division', { unique: false });
                     seriesStore.createIndex('retention_is_permanent', 'retention_is_permanent', { unique: false });
-                    seriesStore.createIndex('record_series_title', 'record_series_title', { unique: false });
-                } else if (oldVersion < 2) {
-                    // Migration for existing series_items store
-                    const transaction = event.target.transaction;
-                    const seriesStore = transaction.objectStore('series_items');
-                    
-                    // Remove old indices
-                    try { seriesStore.deleteIndex('schedule_number'); } catch (e) {}
-                    try { seriesStore.deleteIndex('series_number'); } catch (e) {}
-                    try { seriesStore.deleteIndex('retention_term'); } catch (e) {}
-                    
-                    // Add new indices
-                    try { seriesStore.createIndex('schedule_id', 'schedule_id', { unique: false }); } catch (e) {}
-                    try { seriesStore.createIndex('schedule_item', ['schedule_id', 'item_number'], { unique: true }); } catch (e) {}
+                    seriesStore.createIndex('dates_covered_start', 'dates_covered_start', { unique: false });
+                    seriesStore.createIndex('application_number', 'application_number', { unique: false });
+                    seriesStore.createIndex('tags', 'tags', { unique: false, multiEntry: true });
+                }
+
+                // Legacy migration support for older versions
+                if (oldVersion > 0 && oldVersion < 3) {
+                    // Create schedules object store for migration
+                    if (!db.objectStoreNames.contains('schedules')) {
+                        const scheduleStore = db.createObjectStore('schedules', { autoIncrement: true });
+                        scheduleStore.createIndex('schedule_number', 'schedule_number', { unique: true });
+                        scheduleStore.createIndex('approval_status', 'approval_status', { unique: false });
+                        scheduleStore.createIndex('approval_date', 'approval_date', { unique: false });
+                    }
+
+                    // Create series_items object store for migration
+                    if (!db.objectStoreNames.contains('series_items')) {
+                        const seriesStore = db.createObjectStore('series_items', { autoIncrement: true });
+                        seriesStore.createIndex('schedule_id', 'schedule_id', { unique: false });
+                        seriesStore.createIndex('schedule_item', ['schedule_id', 'item_number'], { unique: true });
+                        seriesStore.createIndex('division', 'division', { unique: false });
+                        seriesStore.createIndex('record_series_title', 'record_series_title', { unique: false });
+                    }
                 }
 
                 // Create audit_events object store
@@ -247,20 +250,40 @@ class ILETSBApp {
 
     // Database Operations
     async getAllSchedules() {
-        return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['schedules'], 'readonly');
-            const store = transaction.objectStore('schedules');
-            const request = store.getAll();
-            
-            request.onsuccess = () => resolve(request.result || []);
-            request.onerror = () => reject(request.error);
+        // Legacy method - now returns unique schedule info from series
+        const series = await this.getAllSeries();
+        const scheduleMap = new Map();
+        
+        series.forEach(item => {
+            if (item.application_number) {
+                const key = item.application_number;
+                if (!scheduleMap.has(key)) {
+                    scheduleMap.set(key, {
+                        _id: `sched_${key}`,
+                        schedule_number: item.application_number,
+                        application_number: item.application_number,
+                        approval_status: item.approval_status,
+                        approval_date: item.approval_date,
+                        division: item.division,
+                        notes: item.notes,
+                        tags: item.tags || []
+                    });
+                }
+            }
         });
+        
+        return Array.from(scheduleMap.values());
     }
 
     async getAllSeriesItems() {
+        // Legacy method - now returns all series
+        return this.getAllSeries();
+    }
+
+    async getAllSeries() {
         return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['series_items'], 'readonly');
-            const store = transaction.objectStore('series_items');
+            const transaction = this.db.transaction(['series'], 'readonly');
+            const store = transaction.objectStore('series');
             const request = store.getAll();
             
             request.onsuccess = () => resolve(request.result || []);
@@ -269,33 +292,35 @@ class ILETSBApp {
     }
 
     async saveSchedule(schedule, isUpdate = false) {
-        return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['schedules'], 'readwrite');
-            const store = transaction.objectStore('schedules');
+        // Legacy method - now updates all series with matching application_number
+        const series = await this.getAllSeries();
+        const matchingSeries = series.filter(s => s.application_number === schedule.schedule_number);
+        
+        const promises = matchingSeries.map(seriesItem => {
+            // Update schedule fields on the series item
+            seriesItem.application_number = schedule.schedule_number;
+            seriesItem.approval_status = schedule.approval_status;
+            seriesItem.approval_date = schedule.approval_date;
+            seriesItem.division = schedule.division || seriesItem.division;
+            seriesItem.notes = schedule.notes;
+            seriesItem.tags = schedule.tags || seriesItem.tags;
             
-            const now = new Date().toISOString();
-            if (!isUpdate) {
-                schedule.created_at = now;
-                schedule.version = 1;
-            }
-            schedule.updated_at = now;
-            
-            const request = isUpdate ? store.put(schedule, schedule._id) : store.add(schedule);
-            
-            request.onsuccess = () => {
-                const id = request.result;
-                schedule._id = id;
-                this.logAuditEvent('schedule', id, isUpdate ? 'update' : 'create', { schedule_number: schedule.schedule_number });
-                resolve(schedule);
-            };
-            request.onerror = () => reject(request.error);
+            return this.saveSeries(seriesItem, true);
         });
+        
+        await Promise.all(promises);
+        return schedule;
     }
 
     async saveSeriesItem(item, isUpdate = false) {
+        // Legacy method - now calls saveSeries
+        return this.saveSeries(item, isUpdate);
+    }
+
+    async saveSeries(item, isUpdate = false) {
         return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['series_items'], 'readwrite');
-            const store = transaction.objectStore('series_items');
+            const transaction = this.db.transaction(['series'], 'readwrite');
+            const store = transaction.objectStore('series');
             
             const now = new Date().toISOString();
             if (!isUpdate) {
@@ -303,13 +328,15 @@ class ILETSBApp {
             }
             item.updated_at = now;
             
-            const request = isUpdate ? store.put(item, item._id) : store.add(item);
+            const request = isUpdate ? store.put(item) : store.add(item);
             
             request.onsuccess = () => {
                 const id = request.result;
                 item._id = id;
                 this.logAuditEvent('series', id, isUpdate ? 'update' : 'create', { 
-                    item_number: item.item_number 
+                    application_number: item.application_number,
+                    item_number: item.item_number,
+                    record_series_title: item.record_series_title
                 });
                 resolve(item);
             };
@@ -318,23 +345,33 @@ class ILETSBApp {
     }
 
     async deleteSchedule(id) {
-        return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['schedules'], 'readwrite');
-            const store = transaction.objectStore('schedules');
-            const request = store.delete(id);
+        // Legacy method - now removes schedule assignment from all matching series
+        const series = await this.getAllSeries();
+        const scheduleNumber = id.replace('sched_', '');
+        const matchingSeries = series.filter(s => s.application_number === scheduleNumber);
+        
+        const promises = matchingSeries.map(seriesItem => {
+            // Remove schedule assignment fields
+            delete seriesItem.application_number;
+            delete seriesItem.approval_status;
+            delete seriesItem.approval_date;
             
-            request.onsuccess = () => {
-                this.logAuditEvent('schedule', id, 'delete', {});
-                resolve();
-            };
-            request.onerror = () => reject(request.error);
+            return this.saveSeries(seriesItem, true);
         });
+        
+        await Promise.all(promises);
+        this.logAuditEvent('series', id, 'schedule_unassigned', { schedule_number: scheduleNumber });
     }
 
     async deleteSeriesItem(id) {
+        // Legacy method - now calls deleteSeries
+        return this.deleteSeries(id);
+    }
+
+    async deleteSeries(id) {
         return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['series_items'], 'readwrite');
-            const store = transaction.objectStore('series_items');
+            const transaction = this.db.transaction(['series'], 'readwrite');
+            const store = transaction.objectStore('series');
             const request = store.delete(id);
             
             request.onsuccess = () => {
@@ -368,8 +405,8 @@ class ILETSBApp {
     // Search and Filtering
     async searchSeriesItems(filters = {}) {
         return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['series_items'], 'readonly');
-            const store = transaction.objectStore('series_items');
+            const transaction = this.db.transaction(['series'], 'readonly');
+            const store = transaction.objectStore('series');
             const request = store.getAll();
             
             request.onsuccess = () => {
@@ -386,10 +423,7 @@ class ILETSBApp {
                 }
                 
                 if (filters.scheduleNumber) {
-                    const schedule = this.schedules.find(s => s.schedule_number === filters.scheduleNumber);
-                    if (schedule) {
-                        items = items.filter(item => item.schedule_id === schedule._id);
-                    }
+                    items = items.filter(item => item.application_number === filters.scheduleNumber);
                 }
                 
                 if (filters.division) {
@@ -397,16 +431,7 @@ class ILETSBApp {
                 }
                 
                 if (filters.approvalStatus) {
-                    // Need to cross-reference with schedules
-                    // For now, skip this filter
-                }
-                
-                if (filters.permanentOnly !== null) {
-                    items = items.filter(item => item.retention_is_permanent === filters.permanentOnly);
-                }
-                
-                if (filters.termOnly !== null) {
-                    items = items.filter(item => !item.retention_is_permanent === filters.termOnly);
+                    items = items.filter(item => item.approval_status === filters.approvalStatus);
                 }
                 
                 resolve(items);
@@ -444,9 +469,6 @@ class ILETSBApp {
         document.getElementById('scheduleFilter').addEventListener('change', () => this.applyFilters());
         document.getElementById('divisionFilter').addEventListener('change', () => this.applyFilters());
         document.getElementById('statusFilter').addEventListener('change', () => this.applyFilters());
-        document.getElementById('permanentFilter').addEventListener('change', () => this.applyFilters());
-        document.getElementById('termFilter').addEventListener('change', () => this.applyFilters());
-        document.getElementById('retentionCategoryFilter').addEventListener('change', () => this.applyFilters());
         document.getElementById('approvalDateStart').addEventListener('change', () => this.applyFilters());
         document.getElementById('approvalDateEnd').addEventListener('change', () => this.applyFilters());
         document.getElementById('coverageDateStart').addEventListener('input', () => this.debounceSearch());
@@ -476,20 +498,6 @@ class ILETSBApp {
         document.getElementById('deleteScheduleBtn').addEventListener('click', () => this.confirmDeleteSchedule());
         document.getElementById('deleteSeriesBtn').addEventListener('click', () => this.confirmDeleteSeriesItem());
 
-        // Retention toggle
-        document.getElementById('isPermanent').addEventListener('change', (e) => {
-            const retentionTermGroup = document.getElementById('retentionTermGroup');
-            if (retentionTermGroup) {
-                retentionTermGroup.style.display = e.target.checked ? 'none' : 'block';
-                if (e.target.checked) {
-                    const retentionTermInput = document.getElementById('retentionTerm');
-                    if (retentionTermInput) {
-                        retentionTermInput.value = '';
-                    }
-                }
-            }
-        });
-
         // Modal
         document.getElementById('confirmBtn').addEventListener('click', () => this.handleConfirm());
         document.getElementById('cancelBtn').addEventListener('click', () => this.hideModal());
@@ -506,14 +514,14 @@ class ILETSBApp {
             });
         });
 
-        // Byte converters
+        // Volume information unit buttons
         document.querySelectorAll('.converter-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
-                const multiplier = parseInt(e.target.dataset.multiplier);
-                const input = e.target.closest('.form-group').querySelector('input[type="number"]');
-                if (input && input.value) {
-                    const currentValue = parseFloat(input.value);
-                    input.value = Math.round(currentValue * multiplier);
+                const unit = e.target.dataset.unit;
+                const input = e.target.closest('.form-group').querySelector('input[type="text"]');
+                if (input) {
+                    const currentValue = input.value.trim();
+                    input.value = currentValue ? `${currentValue} ${unit}` : unit;
                 }
             });
         });
@@ -540,6 +548,9 @@ class ILETSBApp {
         // Admin menu wiring
         this.setupAdminMenu();
 
+        // Import status modal wiring
+        this.setupImportStatusModal();
+
         // Global click handler for closing dropdowns
         document.addEventListener('click', (e) => this.handleGlobalClick(e));
     }
@@ -557,8 +568,9 @@ class ILETSBApp {
         this.schedules = [];
         this.seriesItems = [];
         
-        // Load schedules with cursor
+        // Load schedules and series data sequentially to avoid race conditions
         await this.loadSchedulesWithCursor();
+        this.seriesItems = await this.getAllSeries(); // Load actual series data for UI
         
         // Load series items count only for UI updates
         this.totalSeriesCount = await this.getSeriesItemsCount();
@@ -570,6 +582,16 @@ class ILETSBApp {
     }
 
     async loadSchedulesWithCursor(limit = null, offset = 0) {
+        // In merged model, schedules are derived from series data
+        try {
+            this.schedules = await this.getAllSchedules();
+            return Promise.resolve();
+        } catch (error) {
+            return Promise.reject(error);
+        }
+    }
+
+    async loadSchedulesWithCursorOld(limit = null, offset = 0) {
         return new Promise((resolve, reject) => {
             const transaction = this.db.transaction(['schedules'], 'readonly');
             const store = transaction.objectStore('schedules');
@@ -607,8 +629,8 @@ class ILETSBApp {
 
     async getSeriesItemsCount() {
         return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['series_items'], 'readonly');
-            const store = transaction.objectStore('series_items');
+            const transaction = this.db.transaction(['series'], 'readonly');
+            const store = transaction.objectStore('series');
             const request = store.count();
             
             request.onsuccess = () => resolve(request.result);
@@ -621,11 +643,9 @@ class ILETSBApp {
         const scheduleFilter = document.getElementById('scheduleFilter');
         const divisionFilter = document.getElementById('divisionFilter');
         const statusFilter = document.getElementById('statusFilter');
-        const permanentFilter = document.getElementById('permanentFilter');
-        const termFilter = document.getElementById('termFilter');
 
         // Check if elements exist before accessing values
-        if (!searchInput || !scheduleFilter || !divisionFilter || !statusFilter || !permanentFilter || !termFilter) {
+        if (!searchInput || !scheduleFilter || !divisionFilter || !statusFilter) {
             ErrorHandler.log(new Error('Filter elements not found'), 'Apply filters', APP_CONSTANTS.ERROR_TYPES.VALIDATION);
             return;
         }
@@ -634,9 +654,7 @@ class ILETSBApp {
             searchText: searchInput.value.trim(),
             scheduleNumber: scheduleFilter.value,
             division: divisionFilter.value,
-            approvalStatus: statusFilter.value,
-            permanentOnly: permanentFilter.checked ? true : null,
-            termOnly: termFilter.checked ? true : null
+            approvalStatus: statusFilter.value
         };
 
         try {
@@ -665,7 +683,7 @@ class ILETSBApp {
     clearFilters() {
         const elements = [
             'searchInput', 'scheduleFilter', 'divisionFilter', 
-            'statusFilter', 'permanentFilter', 'termFilter', 'retentionCategoryFilter',
+            'statusFilter', 'retentionCategoryFilter',
             'approvalDateStart', 'approvalDateEnd', 'coverageDateStart', 'coverageDateEnd'
         ];
         
@@ -685,34 +703,21 @@ class ILETSBApp {
 
     async updateUI() {
         try {
+            // Load data sequentially to avoid race conditions
             this.schedules = await this.getAllSchedules();
-            this.seriesItems = await this.getAllSeriesItems();
+            this.seriesItems = await this.getAllSeries(); // Use getAllSeries for merged model
             this.filteredItems = [...this.seriesItems];
-
-            // Normalize existing records so relationships are consistent
-            await this.normalizeExistingData();
             
-            this.populateFilterDropdowns();
+            // Wait for data to be fully loaded before updating UI
+            await this.populateFilterDropdowns();
+            
             // Keep the Series form schedule dropdown in sync with schedules
             if (typeof this.populateSeriesScheduleDropdown === 'function') {
                 this.populateSeriesScheduleDropdown();
             }
-            // Diagnostic: log series items whose schedule reference has no matching schedule
-            try {
-                const scheduleSet = this.getScheduleNumberSet();
-                const orphans = this.seriesItems.filter(si => {
-                    return si.schedule_id && !this.schedules.find(s => s._id === si.schedule_id);
-                });
-                if (orphans.length > 0) {
-                    // Non-fatal notice in console and UI status for awareness
-                    console.warn('Orphan series items (no matching schedule):', orphans.map(o => ({ id: o._id, scheduleId: o.schedule_id, item: o.item_number, title: o.record_series_title })));
-                    this.setStatus(`${orphans.length} series item(s) reference a missing schedule.`, 'warning');
-                }
-            } catch (diagErr) {
-                // Do not block UI if diagnostics fail
-                console.warn('Diagnostics failed', diagErr);
-            }
-            this.renderResults();
+            
+            // Render results after all data is loaded
+            await this.renderResults();
             this.updateResultsSummary();
             this.updateRecordCount();
         } catch (error) {
@@ -721,8 +726,8 @@ class ILETSBApp {
     }
 
     populateFilterDropdowns() {
-        // Schedule numbers
-        const scheduleNumbers = [...new Set(this.schedules.map(s => s.schedule_number).filter(n => n))];
+        // Schedule numbers - use application_number from merged model
+        const scheduleNumbers = [...new Set(this.seriesItems.map(s => s.application_number).filter(n => n))];
         const scheduleSelect = document.getElementById('scheduleFilter');
         if (scheduleSelect) {
             DOMHelper.clearElement(scheduleSelect);
@@ -934,8 +939,8 @@ class ILETSBApp {
 
     async getFilteredItemsCount() {
         return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['series_items'], 'readonly');
-            const store = transaction.objectStore('series_items');
+            const transaction = this.db.transaction(['series'], 'readonly');
+            const store = transaction.objectStore('series');
             const request = store.openCursor();
             
             let count = 0;
@@ -958,8 +963,8 @@ class ILETSBApp {
 
     async getFilteredItemsRange(offset, limit) {
         return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['series_items'], 'readonly');
-            const store = transaction.objectStore('series_items');
+            const transaction = this.db.transaction(['series'], 'readonly');
+            const store = transaction.objectStore('series');
             const request = store.openCursor();
             
             const items = [];
@@ -969,19 +974,16 @@ class ILETSBApp {
             request.onsuccess = (event) => {
                 const cursor = event.target.result;
                 if (cursor) {
-                    if (this.matchesCurrentFilters(cursor.value)) {
-                        if (currentIndex >= offset && foundItems < limit) {
-                            items.push({ ...cursor.value, _id: cursor.key });
-                            foundItems++;
-                        }
-                        currentIndex++;
-                        
-                        if (foundItems >= limit) {
-                            resolve(items);
-                            return;
-                        }
+                    if (currentIndex >= offset && foundItems < limit) {
+                        items.push({ ...cursor.value, _id: cursor.key });
+                        foundItems++;
                     }
-                    cursor.continue();
+                    currentIndex++;
+                    
+                    if (foundItems >= limit) {
+                        resolve(items);
+                        return;
+                    }
                 } else {
                     resolve(items);
                 }
@@ -997,9 +999,6 @@ class ILETSBApp {
         const applicationFilter = document.getElementById('applicationFilter')?.value || '';
         const divisionFilter = document.getElementById('divisionFilter')?.value || '';
         const statusFilter = document.getElementById('statusFilter')?.value || '';
-        const permanentFilter = document.getElementById('permanentFilter')?.checked || false;
-        const termFilter = document.getElementById('termFilter')?.checked || false;
-        const retentionCategoryFilter = document.getElementById('retentionCategoryFilter')?.value || '';
         const approvalDateStart = document.getElementById('approvalDateStart')?.value || '';
         const approvalDateEnd = document.getElementById('approvalDateEnd')?.value || '';
         const coverageDateStart = document.getElementById('coverageDateStart')?.value || '';
@@ -1048,25 +1047,6 @@ class ILETSBApp {
             if (approvalStatus !== statusFilter) return false;
         }
 
-        // Retention type filters
-        if (permanentFilter && termFilter) {
-            // Both selected - show all
-        } else if (permanentFilter && !item.retention_is_permanent) {
-            return false;
-        } else if (termFilter && item.retention_is_permanent) {
-            return false;
-        } else if (!permanentFilter && !termFilter) {
-            // Neither selected - show all
-        }
-
-        // Retention category filter
-        if (retentionCategoryFilter) {
-            const category = this.getRetentionCategory(item);
-            if (category !== retentionCategoryFilter) {
-                return false;
-            }
-        }
-
         // Approval date range filter (uses schedule.approval_date)
         if (approvalDateStart || approvalDateEnd) {
             const schedule = this.schedules.find(s => s._id === item.schedule_id);
@@ -1113,9 +1093,7 @@ class ILETSBApp {
     }
 
     getRetentionCategory(item) {
-        if (item.retention_is_permanent) {
-            return 'permanent';
-        } else if (item.retention_term && item.retention_term > 0) {
+        if (item.retention_term && item.retention_term > 0) {
             return 'time-limited';
         } else {
             return 'unknown';
@@ -1140,9 +1118,8 @@ class ILETSBApp {
         // Column 1: Schedule #
         const colApp = document.createElement('div');
         colApp.className = 'col-app-num';
-        // Display schedule number via join
-        const schedule = this.schedules.find(s => s._id === item.schedule_id);
-        DOMHelper.setTextContent(colApp, schedule ? schedule.schedule_number : 'N/A');
+        // Display application_number directly from merged model
+        DOMHelper.setTextContent(colApp, item.application_number || 'N/A');
 
         // Column 2: Item #
         const colItem = document.createElement('div');
@@ -1385,7 +1362,6 @@ class ILETSBApp {
             'seriesDivision': item.division || '',
             'seriesContact': item.contact || '',
             'seriesLocation': item.location || '',
-            'retentionTerm': item.retention_term || '',
             'retentionText': item.retention_text || '',
             'retentionTrigger': item.retention_trigger || '',
             'volumePaper': item.volume_paper_cuft || '',
@@ -1416,18 +1392,16 @@ class ILETSBApp {
         });
 
         // Set checkboxes
-        const isPermanentCheckbox = document.getElementById('isPermanent');
         const auditHoldCheckbox = document.getElementById('auditHold');
         const litigationHoldCheckbox = document.getElementById('litigationHold');
 
-        if (isPermanentCheckbox) isPermanentCheckbox.checked = item.retention_is_permanent || false;
         if (auditHoldCheckbox) auditHoldCheckbox.checked = item.audit_hold_required || false;
         if (litigationHoldCheckbox) litigationHoldCheckbox.checked = item.litigation_hold_required || false;
 
         // Toggle retention term visibility
         const retentionTermGroup = document.getElementById('retentionTermGroup');
         if (retentionTermGroup) {
-            retentionTermGroup.style.display = item.retention_is_permanent ? 'none' : 'block';
+            retentionTermGroup.style.display = 'none';
         }
     }
 
@@ -1436,7 +1410,9 @@ class ILETSBApp {
             'scheduleNum': schedule.schedule_number || '',
             'approvalStatus': schedule.approval_status || 'draft',
             'approvalDate': schedule.approval_date || '',
-            'scheduleNotes': schedule.notes || ''
+            'scheduleDivision': schedule.division || '',
+            'scheduleNotes': schedule.notes || '',
+            'scheduleTags': schedule.tags ? schedule.tags.join(', ') : ''
         };
 
         // Set text inputs and selects
@@ -1485,11 +1461,9 @@ class ILETSBApp {
         if (seriesForm) seriesForm.reset();
         
         const deleteSeriesBtn = document.getElementById('deleteSeriesBtn');
-        const retentionTermGroup = document.getElementById('retentionTermGroup');
         const seriesScheduleNumInput = document.getElementById('seriesScheduleNum');
         
         if (deleteSeriesBtn) deleteSeriesBtn.classList.add('hidden');
-        if (retentionTermGroup) retentionTermGroup.style.display = 'block';
         // Populate the schedule dropdown and focus it
         this.populateSeriesScheduleDropdown();
         if (seriesScheduleNumInput) seriesScheduleNumInput.focus();
@@ -1502,7 +1476,11 @@ class ILETSBApp {
             schedule_number: document.getElementById('scheduleNum').value,
             approval_status: document.getElementById('approvalStatus').value.toLowerCase(),
             approval_date: document.getElementById('approvalDate').value,
-            notes: document.getElementById('scheduleNotes').value
+            division: document.getElementById('scheduleDivision').value,
+            notes: document.getElementById('scheduleNotes').value,
+            tags: document.getElementById('scheduleTags').value 
+                ? document.getElementById('scheduleTags').value.split(',').map(t => t.trim()).filter(t => t) 
+                : []
         };
 
         try {
@@ -1597,8 +1575,6 @@ class ILETSBApp {
             annual_accum_electronic_bytes: parseFloat(document.getElementById('annualElectronic').value) || 0,
             retention_text: document.getElementById('retentionText').value,
             retention_trigger: document.getElementById('retentionTrigger').value,
-            retention_term: parseFloat(document.getElementById('retentionTerm').value) || null,
-            retention_is_permanent: document.getElementById('isPermanent').checked,
             division: document.getElementById('seriesDivision').value,
             contact: document.getElementById('seriesContact').value,
             location: document.getElementById('seriesLocation').value,
@@ -1613,8 +1589,6 @@ class ILETSBApp {
             index_or_finding_aids: document.getElementById('indexFindingAids').value,
             omb_or_statute_refs: document.getElementById('ombStatuteRefs').value,
             related_series: document.getElementById('relatedSeries').value,
-            audit_hold_required: document.getElementById('auditHold').checked,
-            litigation_hold_required: document.getElementById('litigationHold').checked,
             series_notes: document.getElementById('seriesNotes').value,
             updated_at: new Date().toISOString()
         };
@@ -1681,26 +1655,61 @@ class ILETSBApp {
     // Import/Export
     async exportData() {
         try {
-            const schedules = await this.getAllSchedules();
-            const seriesItems = await this.getAllSeriesItems();
+            const seriesItems = await this.getAllSeries();
             const auditEvents = await this.getAllAuditEvents();
             
-            // Clean up export data to remove internal IDs and use schedule_number references
-            const cleanSchedules = schedules.map(schedule => {
-                const exportItem = { ...schedule };
-                delete exportItem._id;
-                return exportItem;
-            });
-            
-            const cleanSeriesItems = seriesItems.map(item => {
-                const exportItem = { ...item };
-                delete exportItem._id;
-                // Add schedule_number reference for import matching
-                const schedule = schedules.find(s => s._id === item.schedule_id);
-                if (schedule) {
-                    exportItem.schedule_number = schedule.schedule_number;
+            // Clean up export data for merged model
+            const cleanSeries = seriesItems.map(item => {
+                const cleanItem = {
+                    record_series_title: item.record_series_title,
+                    description: item.description,
+                    dates_covered_start: item.dates_covered_start,
+                    dates_covered_end: item.dates_covered_end,
+                    open_ended: item.open_ended,
+                    division: item.division,
+                    contact: item.contact,
+                    location: item.location,
+                    retention_text: item.retention_text,
+                    retention: item.retention,
+                    retention_is_permanent: item.retention_is_permanent,
+                    volume_paper_cuft: item.volume_paper_cuft,
+                    volume_electronic_bytes: item.volume_electronic_bytes,
+                    annual_accum_paper_cuft: item.annual_accum_paper_cuft,
+                    annual_accum_electronic_bytes: item.annual_accum_electronic_bytes,
+                    arrangement: item.arrangement,
+                    media_types: item.media_types || [],
+                    electronic_records_standard: item.electronic_records_standard,
+                    number_size_files: item.number_size_files,
+                    index_or_finding_aids: item.index_or_finding_aids,
+                    omb_or_statute_refs: item.omb_or_statute_refs || [],
+                    related_series: item.related_series || [],
+                    series_notes: item.series_notes,
+                    representative_name: item.representative_name,
+                    representative_title: item.representative_title,
+                    representative_phone: item.representative_phone,
+                    records_officer_name: item.records_officer_name,
+                    records_officer_phone: item.records_officer_phone,
+                    tags: item.tags || []
+                };
+                
+                // Include schedule assignment fields if present
+                if (item.application_number) {
+                    cleanItem.application_number = item.application_number;
                 }
-                return exportItem;
+                if (item.item_number) {
+                    cleanItem.item_number = item.item_number;
+                }
+                if (item.approval_status) {
+                    cleanItem.approval_status = item.approval_status;
+                }
+                if (item.approval_date) {
+                    cleanItem.approval_date = item.approval_date;
+                }
+                if (item.notes) {
+                    cleanItem.notes = item.notes;
+                }
+                
+                return cleanItem;
             });
             
             const exportData = {
@@ -1710,8 +1719,7 @@ class ILETSBApp {
                     name: "Illinois Law Enforcement Training and Standards Board",
                     abbrev: "ILETSB"
                 },
-                schedules: exportSchedules,
-                series_items: exportSeriesItems,
+                series: cleanSeries,
                 audit_events: []
             };
 
@@ -1720,12 +1728,10 @@ class ILETSBApp {
             const a = document.createElement('a');
             a.href = url;
             a.download = `iletsb-records-${new Date().toISOString().split('T')[0]}.json`;
-            document.body.appendChild(a);
             a.click();
-            document.body.removeChild(a);
             URL.revokeObjectURL(url);
             
-            await this.logAuditEvent('system', null, 'export', { recordCount: schedules.length + seriesItems.length });
+            await this.logAuditEvent('system', null, 'export', { recordCount: seriesItems.length });
             this.setStatus('Data exported successfully', 'success');
         } catch (error) {
             ErrorHandler.log(error, 'Data export', APP_CONSTANTS.ERROR_TYPES.EXPORT);
@@ -1737,217 +1743,240 @@ class ILETSBApp {
         const file = event.target.files[0];
         if (!file) return;
 
+        // Initialize status modal
+        this.showImportStatus();
+        this.clearImportLog();
+        this.updateImportStatus('Starting import...');
+        this.updateImportCounts(0, 0);
+        this.logImportMessage(`Importing file: ${file.name}`);
+
         try {
             const text = await file.text();
             const data = JSON.parse(text);
             
-            // Validate JSON structure
+            this.logImportMessage('Validating file structure...');
             const validation = this.validateImportData(data);
             if (!validation.valid) {
                 throw new Error(`Invalid file format: ${validation.errors.join(', ')}`);
             }
 
             const results = {
-                schedules: { created: 0, updated: 0, skipped: 0, errors: [] },
-                seriesItems: { created: 0, updated: 0, skipped: 0, errors: [] },
+                series: { created: 0, updated: 0, skipped: 0, errors: [] },
                 auditEvents: { created: 0, updated: 0, skipped: 0, errors: [] }
             };
 
-            // Build mapping from schedule_uid to schedule_id
-            const scheduleIdMap = new Map();
+            // Import series (merged model)
+            const seriesArray = data.series || data.series_items || [];
+            this.logImportMessage(`Processing ${seriesArray.length} series items...`);
             
-            // Import schedules with upsert logic and build mapping
-            for (const schedule of data.schedules) {
+            for (const item of seriesArray) {
                 try {
-                    const result = await this.upsertSchedule(schedule);
-                    results.schedules[result.action]++;
+                    const identifier = `${item.application_number || 'unassigned'}-${item.item_number || 'no-item'}`;
+                    this.logImportMessage(`Importing series ${identifier}: ${item.record_series_title}...`);
                     
-                    // Store the mapping from schedule_uid to _id
-                    if (result.schedule) {
-                        scheduleIdMap.set(schedule.schedule_uid, result.schedule._id);
-                    }
+                    const result = await this.upsertSeries(item);
+                    results.series[result.action]++;
+                    this.logImportMessage(`Series ${identifier} ${result.action} successfully`);
                 } catch (error) {
-                    results.schedules.errors.push(`Schedule ${schedule.schedule_uid}: ${error.message}`);
-                    results.schedules.skipped++;
+                    const identifier = `${item.application_number || 'unassigned'}-${item.item_number || 'no-item'}`;
+                    results.series.errors.push(`Series ${identifier}: ${error.message}`);
+                    results.series.skipped++;
+                    this.logImportMessage(`Error importing series: ${error.message}`);
                 }
+                this.updateImportCounts(results.series.created + results.series.updated, 0);
             }
 
-            // Import series items with proper schedule_id mapping
-            for (const item of data.series_items) {
-                try {
-                    // Find schedule by schedule_number to get its schedule_uid, then map to schedule_id
-                    const schedule = data.schedules.find(s => s.schedule_number === item.schedule_number);
-                    if (!schedule) {
-                        throw new Error(`No matching schedule found for schedule_number: ${item.schedule_number}`);
-                    }
-                    const scheduleId = scheduleIdMap.get(schedule.schedule_uid);
-                    if (!scheduleId) {
-                        throw new Error(`Schedule ${schedule.schedule_uid} was not imported successfully`);
-                    }
-                    
-                    // Create item with proper schedule_id
-                    const itemWithScheduleId = {
-                        ...item,
-                        schedule_id: scheduleId
-                    };
-                    
-                    const result = await this.upsertSeriesItem(itemWithScheduleId);
-                    results.seriesItems[result.action]++;
-                } catch (error) {
-                    results.seriesItems.errors.push(`Series ${item.schedule_number}-${item.item_number}: ${error.message}`);
-                    results.seriesItems.skipped++;
-                }
+            // Show final results
+            const totalSeries = results.series.created + results.series.updated;
+            const hasErrors = results.series.errors.length > 0;
+            
+            if (hasErrors) {
+                this.updateImportStatus(`Import completed with ${results.series.errors.length} errors`);
+            } else {
+                this.updateImportStatus('Import completed successfully');
             }
-
-            // Import and fix audit events with proper entity_id mapping
-            if (data.audit_events && Array.isArray(data.audit_events)) {
-                const oldToNewIdMap = new Map();
-                
-                // Build reverse mapping from old entity_id to new entity_id
-                // This assumes audit events reference schedules/series_items by their old IDs
-                data.audit_events.forEach(event => {
-                    if (event.entity === 'schedule' && event.payload) {
-                        const payload = JSON.parse(event.payload || '{}');
-                        const scheduleNumber = payload.schedule_number;
-                        if (scheduleNumber && scheduleIdMap.has(scheduleNumber)) {
-                            oldToNewIdMap.set(event.entity_id, scheduleIdMap.get(scheduleNumber));
-                        }
-                    } else if (event.entity === 'series') {
-                        // For series items, we need to map based on schedule_number + item_number
-                        // This is more complex and may need additional logic
-                        const payload = JSON.parse(event.payload || '{}');
-                        const scheduleNumber = payload.schedule_number;
-                        const itemNumber = payload.item_number;
-                        
-                        if (scheduleNumber && scheduleIdMap.has(scheduleNumber)) {
-                            // Find the corresponding series item by schedule_id and item_number
-                            // This would require additional mapping logic
-                            // For now, we'll preserve the original entity_id as-is
-                        }
-                    }
-                });
-                
-                // Import audit events with updated entity_id mapping
-                for (const auditEvent of data.audit_events) {
-                    try {
-                        const newEntityId = oldToNewIdMap.get(auditEvent.entity_id) || auditEvent.entity_id;
-                        
-                        const auditEventWithNewId = {
-                            ...auditEvent,
-                            entity_id: newEntityId,
-                            payload: JSON.stringify({
-                                ...JSON.parse(auditEvent.payload || '{}'),
-                                original_entity_id: auditEvent.entity_id // Preserve original for reference
-                            })
-                        };
-                        
-                        await this.saveAuditEvent(auditEventWithNewId);
-                        results.auditEvents.created++;
-                    } catch (error) {
-                        results.auditEvents.errors.push(`Audit event: ${error.message}`);
-                        results.auditEvents.skipped++;
-                    }
-                }
-            }
-
+            
+            this.logImportMessage(`Final results: ${totalSeries} series items processed`);
+            this.updateImportCounts(totalSeries, 0);
+            
             await this.logAuditEvent('system', null, 'import', results);
-            
-            // Show detailed import summary
             this.showImportSummary(results);
             await this.updateUI();
         } catch (error) {
             ErrorHandler.log(error, 'Data import', APP_CONSTANTS.ERROR_TYPES.IMPORT);
+            this.updateImportStatus('Import failed');
+            this.logImportMessage(`Error: ${error.message}`);
             this.setStatus('Error importing data: ' + error.message, 'error');
         }
-        
-        // Reset file input
-        event.target.value = '';
     }
 
     validateImportData(data) {
         const errors = [];
+        const validStatuses = ['draft', 'pending', 'approved', 'superseded'];
         
-        if (!data || typeof data !== 'object') {
-            errors.push('Invalid JSON structure');
-            return { valid: false, errors };
+        // Validate basic structure - support both new and legacy formats
+        const seriesArray = data.series || data.series_items;
+        if (!seriesArray || !Array.isArray(seriesArray)) {
+            errors.push('Missing or invalid series array (expected "series" or "series_items")');
         }
-
-        if (!data.schedules || !Array.isArray(data.schedules)) {
-            errors.push('Missing or invalid schedules array');
-        }
-
-        if (!data.series_items || !Array.isArray(data.series_items)) {
-            errors.push('Missing or invalid series_items array');
-        }
-
-        if (!data.agency || !data.agency.abbrev || data.agency.abbrev !== 'ILETSB') {
-            errors.push('Invalid agency - must be ILETSB');
-        }
-
-        // Validate required fields in schedules
-        data.schedules?.forEach((schedule, index) => {
-            if (!schedule.schedule_uid) {
-                errors.push(`Schedule ${index + 1}: Missing schedule_uid`);
-            }
-            if (!schedule.schedule_number) {
-                errors.push(`Schedule ${index + 1}: Missing schedule_number`);
-            }
-        });
-
-        // Validate required fields in series items
-        data.series_items?.forEach((item, index) => {
-            if (!item.schedule_number) {
-                errors.push(`Series item ${index + 1}: Missing schedule_number`);
-            }
-            if (!item.item_number) {
-                errors.push(`Series item ${index + 1}: Missing item_number`);
-            }
-            if (!item.record_series_title) {
-                errors.push(`Series item ${index + 1}: Missing record_series_title`);
-            }
-        });
-
-        return { valid: errors.length === 0, errors };
-    }
-
-    async upsertSchedule(schedule) {
-        const existing = await this.findScheduleByScheduleUid(schedule.schedule_uid);
         
-        if (existing) {
-            // Update existing schedule
-            const updated = { ...existing, ...schedule, _id: existing._id };
-            await this.saveSchedule(updated, true);
-            return { action: 'updated', schedule: updated };
-        } else {
-            // Create new schedule
-            const created = await this.saveSchedule(schedule);
-            return { action: 'created', schedule: created };
-        }
-    }
-
-    async findScheduleByScheduleUid(scheduleUid) {
-        return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['schedules'], 'readonly');
-            const store = transaction.objectStore('schedules');
-            const request = store.getAll();
-            
-            request.onsuccess = () => {
-                const schedules = request.result || [];
-                const found = schedules.find(s => s.schedule_uid === scheduleUid);
-                if (found) {
-                    found._id = found._id || found.id;
+        // Validate series items
+        if (seriesArray) {
+            seriesArray.forEach((item, i) => {
+                if (!item.record_series_title) {
+                    errors.push(`Series item ${i}: Missing record_series_title (required)`);
                 }
-                resolve(found);
-            };
-            request.onerror = () => reject(request.error);
-        });
+                
+                // Validate application_number format if present
+                if (item.application_number && !/^\d{2}-\d{3}$/.test(item.application_number)) {
+                    errors.push(`Series item ${i}: Invalid application_number format (expected XX-XXX)`);
+                }
+                
+                // Validate item_number format if present
+                if (item.item_number && !/^\d+([A-Za-z]|\.\d+)?$/.test(item.item_number)) {
+                    errors.push(`Series item ${i}: Invalid item_number format`);
+                }
+                
+                // Validate approval_status if present
+                if (item.approval_status && !validStatuses.includes(item.approval_status)) {
+                    errors.push(`Series item ${i}: Invalid approval_status (must be one of: ${validStatuses.join(', ')})`);
+                }
+                
+                // Validate tags array if present
+                if (item.tags && !Array.isArray(item.tags)) {
+                    errors.push(`Series item ${i}: tags must be an array`);
+                }
+                
+                // Validate dates_covered_start format if present
+                if (item.dates_covered_start && !/^\d{4}(-\d{2}(-\d{2})?)?$/.test(item.dates_covered_start)) {
+                    errors.push(`Series item ${i}: Invalid dates_covered_start format (expected YYYY, YYYY-MM, or YYYY-MM-DD)`);
+                }
+                
+                // Validate arrays
+                if (item.media_types && !Array.isArray(item.media_types)) {
+                    errors.push(`Series item ${i}: media_types must be an array`);
+                }
+                
+                if (item.omb_or_statute_refs && !Array.isArray(item.omb_or_statute_refs)) {
+                    errors.push(`Series item ${i}: omb_or_statute_refs must be an array`);
+                }
+                
+                if (item.related_series && !Array.isArray(item.related_series)) {
+                    errors.push(`Series item ${i}: related_series must be an array`);
+                }
+            });
+        }
+        
+        return {
+            valid: errors.length === 0,
+            errors
+        };
+    }
+
+    async upsertSeries(item) {
+        // Normalize the item data
+        const normalizedItem = this.normalizeSeriesItem(item);
+        
+        // Check for existing series by natural key
+        let existingSeries = null;
+        if (normalizedItem.application_number && normalizedItem.item_number) {
+            const allSeries = await this.getAllSeries();
+            existingSeries = allSeries.find(s => 
+                s.application_number === normalizedItem.application_number && 
+                s.item_number === normalizedItem.item_number
+            );
+        }
+        
+        if (existingSeries) {
+            // Update existing series
+            const updatedItem = { ...existingSeries, ...normalizedItem };
+            const result = await this.saveSeries(updatedItem, true);
+            return { action: 'updated', series: result };
+        } else {
+            // Create new series
+            const result = await this.saveSeries(normalizedItem, false);
+            return { action: 'created', series: result };
+        }
+    }
+
+    normalizeSeriesItem(item) {
+        const normalized = { ...item };
+        
+        // Handle legacy field mappings
+        if (item.schedule_number && !normalized.application_number) {
+            normalized.application_number = item.schedule_number;
+        }
+        
+        // Ensure arrays are arrays
+        if (normalized.tags && typeof normalized.tags === 'string') {
+            normalized.tags = normalized.tags.split(';').map(t => t.trim()).filter(t => t);
+        }
+        if (normalized.media_types && typeof normalized.media_types === 'string') {
+            normalized.media_types = normalized.media_types.split(';').map(t => t.trim()).filter(t => t);
+        }
+        
+        // Handle open-ended dates
+        if (normalized.dates_covered_end === 'present' || normalized.dates_covered_end === '') {
+            normalized.dates_covered_end = null;
+            normalized.open_ended = true;
+        }
+        
+        // Calculate retention_is_permanent
+        if (normalized.retention && normalized.retention.final_disposition) {
+            normalized.retention_is_permanent = normalized.retention.final_disposition === 'permanent';
+        }
+        
+        // Remove legacy fields
+        delete normalized.schedule_number;
+        delete normalized.schedule_id;
+        delete normalized.schedule_uid;
+        
+        return normalized;
+    }
+
+    async upsertSchedule(scheduleData) {
+        // Ensure database is initialized
+        if (!this.db) {
+            await this.initDatabase();
+        }
+
+        // Normalize data
+        const schedule = {
+            schedule_number: scheduleData.schedule_number,
+            approval_status: scheduleData.approval_status.toLowerCase(),
+            approval_date: scheduleData.approval_date,
+            division: scheduleData.division,
+            notes: scheduleData.notes,
+            tags: Array.isArray(scheduleData.tags) ? scheduleData.tags : [],
+            schedule_uid: scheduleData.schedule_uid || crypto.randomUUID(),
+            updated_at: new Date().toISOString()
+        };
+
+        // Find existing schedule by schedule_uid
+        const existing = await this.db.schedules
+            .where('schedule_uid')
+            .equals(schedule.schedule_uid)
+            .first();
+
+        if (existing) {
+            schedule._id = existing._id;
+            schedule.version = (existing.version || 1) + 1;
+            schedule.created_at = existing.created_at;
+            await this.db.schedules.update(schedule._id, schedule);
+            return { action: 'updated', schedule };
+        } else {
+            schedule.created_at = new Date().toISOString();
+            schedule.version = 1;
+            const id = await this.db.schedules.add(schedule);
+            return { action: 'created', schedule: { ...schedule, _id: id } };
+        }
     }
 
     async findSeriesItemByScheduleAndItem(scheduleId, itemNumber) {
         return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['series_items'], 'readonly');
-            const store = transaction.objectStore('series_items');
-            const index = store.index('schedule_item');
+            const transaction = this.db.transaction(['series'], 'readonly');
+            const store = transaction.objectStore('series');
+            const index = store.index('application_number+item_number');
             const request = index.get([scheduleId, itemNumber]);
 
             request.onsuccess = () => resolve(request.result);
@@ -1957,9 +1986,9 @@ class ILETSBApp {
 
     async checkDuplicateItemNumber(scheduleId, itemNumber, excludeId = null) {
         return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['series_items'], 'readonly');
-            const store = transaction.objectStore('series_items');
-            const index = store.index('schedule_item');
+            const transaction = this.db.transaction(['series'], 'readonly');
+            const store = transaction.objectStore('series');
+            const index = store.index('application_number+item_number');
             const request = index.get([scheduleId, itemNumber]);
             
             request.onsuccess = () => {
@@ -1988,12 +2017,12 @@ class ILETSBApp {
     }
 
     showImportSummary(results) {
-        const totalSchedules = results.schedules.created + results.schedules.updated;
-        const totalSeries = results.seriesItems.created + results.seriesItems.updated;
+        // Handle merged model results structure
+        const totalSeries = (results.series?.created || 0) + (results.series?.updated || 0);
         const totalAuditEvents = results.auditEvents?.created || 0;
-        const totalErrors = results.schedules.errors.length + results.seriesItems.errors.length + (results.auditEvents?.errors?.length || 0);
+        const totalErrors = (results.series?.errors?.length || 0) + (results.auditEvents?.errors?.length || 0);
 
-        let message = `Import completed: ${totalSchedules} schedules (${results.schedules.created} new, ${results.schedules.updated} updated), ${totalSeries} series items (${results.seriesItems.created} new, ${results.seriesItems.updated} updated)`;
+        let message = `Import completed: ${totalSeries} series items (${results.series?.created || 0} new, ${results.series?.updated || 0} updated)`;
         
         if (totalAuditEvents > 0) {
             message += `, ${totalAuditEvents} audit events`;
@@ -2045,6 +2074,7 @@ class ILETSBApp {
         const isHidden = dropdown.classList.contains('hidden');
         
         if (isHidden) {
+            // Expand
             dropdown.classList.remove('hidden');
             adminBtn.setAttribute('aria-expanded', 'true');
             // Focus first actionable item
@@ -2101,76 +2131,6 @@ class ILETSBApp {
         // Close if click is outside admin menu area
         if (!adminMenu.contains(e.target)) {
             this.closeAdminMenu();
-        }
-    }
-
-    async clearDatabase() {
-        try {
-            this.setStatus('Clearing database...', 'warning');
-
-            // Close any open connections
-            if (this.db) {
-                try { this.db.close(); } catch {}
-            }
-
-            let deleteSucceeded = false;
-            await new Promise((resolve, reject) => {
-                const deleteRequest = indexedDB.deleteDatabase(this.dbName);
-                deleteRequest.onerror = () => reject(deleteRequest.error || new Error('Failed to delete database'));
-                deleteRequest.onblocked = () => {
-                    // Advise user if multiple tabs are open
-                    this.setStatus('Database deletion is blocked. Close other tabs of this app and try again.', 'error');
-                    reject(new Error('Deletion blocked'));
-                };
-                deleteRequest.onsuccess = () => { deleteSucceeded = true; resolve(); };
-            });
-
-            // Reset in-memory state
-            this.db = null;
-            this.schedules = [];
-            this.seriesItems = [];
-            this.filteredItems = [];
-            this.currentSchedule = null;
-            this.currentSeriesItem = null;
-            this.selectedItemId = null;
-            this.virtualScroller = null;
-
-            // Recreate empty DB schema
-            await this.initDatabase();
-
-            // Force-clear all stores for absolute certainty
-            await new Promise((resolve, reject) => {
-                const tx = this.db.transaction(['schedules','series_items','audit_events'], 'readwrite');
-                tx.objectStore('schedules').clear();
-                tx.objectStore('series_items').clear();
-                tx.objectStore('audit_events').clear();
-                tx.oncomplete = () => resolve();
-                tx.onerror = () => reject(tx.error || new Error('Failed to clear stores'));
-            });
-
-            // Reset UI without calling updateUI() which would reload sample data
-            this.clearFilters();
-            // Clear results pane DOM immediately to avoid stale rows
-            const resultsList = document.getElementById('resultsList');
-            if (resultsList) {
-                resultsList.scrollTop = 0;
-                DOMHelper.clearElement(resultsList);
-                const emptyState = document.getElementById('emptyState');
-                if (emptyState) resultsList.appendChild(emptyState);
-            }
-            this.cancelScheduleEdit();
-            this.cancelSeriesEdit();
-            
-            // Manually update UI components without loading sample data
-            this.populateFilterDropdowns();
-            this.updateResultsSummary();
-            this.updateRecordCount();
-
-            this.setStatus('Database cleared successfully', 'success');
-            this.closeAdminMenu();
-        } catch (error) {
-            ErrorHandler.log(error, 'Clear database', APP_CONSTANTS.ERROR_TYPES.DATABASE);
-            this.setStatus('Error clearing database: ' + (error.message || error), 'error');
         }
     }
 
@@ -2236,19 +2196,6 @@ class ILETSBApp {
             const num = parseFloat(value);
             if (isNaN(num) || num < 0) {
                 this.showFieldError(field, 'Please enter a valid positive number');
-                return false;
-            }
-        }
-
-        // Retention logic validation
-        if (fieldId === 'retentionTerm') {
-            const isPermanent = document.getElementById('retentionIsPermanent')?.checked;
-            if (isPermanent && value) {
-                this.showFieldError(field, 'Retention term should be empty for permanent records');
-                return false;
-            }
-            if (!isPermanent && !value) {
-                this.showFieldError(field, 'Retention term is required for non-permanent records');
                 return false;
             }
         }
@@ -2442,8 +2389,6 @@ class ILETSBApp {
             { key: 'annual_accum_electronic_bytes', label: 'Annual Electronic (bytes)' },
             { key: 'retention_text', label: 'Retention Text' },
             { key: 'retention_trigger', label: 'Retention Trigger' },
-            { key: 'retention_term', label: 'Retention Term (years)' },
-            { key: 'retention_is_permanent', label: 'Is Permanent (true/false)' },
             { key: 'division', label: 'Division' },
             { key: 'contact', label: 'Contact' },
             { key: 'location', label: 'Location' },
@@ -2453,6 +2398,11 @@ class ILETSBApp {
             { key: 'records_officer_name', label: 'Records Officer Name' },
             { key: 'records_officer_phone', label: 'Records Officer Phone' },
             { key: 'media_types', label: 'Media Types' },
+            { key: 'electronic_records_standard', label: 'Electronic Records Standard' },
+            { key: 'number_size_files', label: 'Number Size Files' },
+            { key: 'index_or_finding_aids', label: 'Index or Finding Aids' },
+            { key: 'omb_or_statute_refs', label: 'OMB or Statute References' },
+            { key: 'related_series', label: 'Related Series' },
             { key: 'series_notes', label: 'Series Notes' }
         ];
 
@@ -2480,6 +2430,12 @@ class ILETSBApp {
         });
         
         return container;
+    }
+
+    hideCsvModal() {
+        const modal = document.getElementById('csvImportModal');
+        modal.classList.add('hidden');
+        this.csvData = null;
     }
 
     async processCsvImport() {
@@ -2553,10 +2509,6 @@ class ILETSBApp {
                 // Type conversion based on field
                 if (fieldName.includes('volume') || fieldName.includes('term')) {
                     item[fieldName] = parseFloat(value) || 0;
-                } else if (fieldName === 'retention_is_permanent') {
-                    item[fieldName] = value.toLowerCase() === 'true' || value === '1';
-                } else if (fieldName.includes('hold_required')) {
-                    item[fieldName] = value.toLowerCase() === 'true' || value === '1';
                 } else {
                     item[fieldName] = value;
                 }
@@ -2663,10 +2615,7 @@ class ILETSBApp {
     addQualityIndicators(item) {
         const indicators = {
             completeness: this.calculateDataCompleteness(item),
-            retentionFlags: this.flagRetentionKeywords(item.retention_text),
-            hasAuditHold: item.audit_hold_required,
-            hasLitigationHold: item.litigation_hold_required,
-            isPermanent: item.retention_is_permanent
+            retentionFlags: this.flagRetentionKeywords(item.retention_text)
         };
         
         return { ...item, qualityIndicators: indicators };
@@ -2735,8 +2684,8 @@ class ILETSBApp {
 
     async getFilteredItems() {
         return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['series_items'], 'readonly');
-            const store = transaction.objectStore('series_items');
+            const transaction = this.db.transaction(['series'], 'readonly');
+            const store = transaction.objectStore('series');
             const request = store.openCursor();
             const items = [];
 
@@ -2812,10 +2761,9 @@ class ILETSBApp {
                     <td>${item.record_series_title || 'Untitled'}</td>
                     <td>${approvalStatus}</td>
                     <td>${item.division || 'N/A'}</td>
-                    <td>${item.retention_is_permanent ? 'Permanent' : (item.retention_term ? `${item.retention_term} years` : 'Not specified')}</td>
+                    <td>${item.retention_text || 'Not specified'}</td>
                     <td>${this.formatDateRange(item.dates_covered_start, item.dates_covered_end)}</td>
                     <td>${completeness}%</td>
-                    <td>${retentionFlags.join(', ') || 'None'}</td>
                 </tr>
             `;
         }).join('');
@@ -2921,7 +2869,6 @@ class ILETSBApp {
                             <th>Retention</th>
                             <th>Dates Covered</th>
                             <th>Completeness</th>
-                            <th>Flags</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -2938,116 +2885,6 @@ class ILETSBApp {
         `;
     }
 
-    async confirmDeleteSchedule() {
-        if (!this.currentSchedule) return;
-        
-        // Check if schedule has series items
-        const relatedSeries = this.seriesItems.filter(item => 
-            item.schedule_id === this.currentSchedule._id || 
-            item.application_number === this.currentSchedule.application_number
-        );
-        
-        if (relatedSeries.length > 0) {
-            if (this.currentSchedule.approval_status === APP_CONSTANTS.APPROVAL_STATUS.DRAFT) {
-                // For drafts, allow cascade delete
-                const confirmed = await this.showConfirmModal(
-                    'Delete Draft Schedule',
-                    `This draft schedule "${this.currentSchedule.application_number}" has ${relatedSeries.length} series item(s). Deleting the schedule will also delete all its series items. This action cannot be undone.`
-                );
-                
-                if (!confirmed) return;
-                
-                try {
-                    // Delete all related series items first
-                    for (const item of relatedSeries) {
-                        await this.deleteSeriesItem(item._id);
-                    }
-                    
-                    await this.deleteSchedule(this.currentSchedule._id);
-                    this.setStatus('Draft schedule and related series items deleted successfully', 'success');
-                    await this.updateUI();
-                    this.cancelScheduleEdit();
-                } catch (error) {
-                    ErrorHandler.log(error, 'Delete draft schedule', APP_CONSTANTS.ERROR_TYPES.DATABASE);
-                    this.setStatus('Error deleting draft schedule: ' + error.message, 'error');
-                }
-            } else {
-                // For approved schedules, block deletion
-                this.setStatus(`Cannot delete approved schedule "${this.currentSchedule.application_number}" because it has ${relatedSeries.length} series item(s). Delete the series items first.`, 'error');
-                return;
-            }
-        } else {
-            // No related series, safe to delete
-            const confirmed = await this.showConfirmModal(
-                'Delete Schedule',
-                `Are you sure you want to delete schedule "${this.currentSchedule.application_number}"? This action cannot be undone.`
-            );
-            
-            if (!confirmed) return;
-            
-            try {
-                await this.deleteSchedule(this.currentSchedule._id);
-                this.setStatus('Schedule deleted successfully', 'success');
-                await this.updateUI();
-                this.cancelScheduleEdit();
-            } catch (error) {
-                ErrorHandler.log(error, 'Delete schedule', APP_CONSTANTS.ERROR_TYPES.DATABASE);
-                this.setStatus('Error deleting schedule: ' + error.message, 'error');
-            }
-        }
-    }
-
-    async confirmDeleteSeriesItem() {
-        if (!this.currentSeriesItem) return;
-        
-        const confirmed = await this.showConfirmModal(
-            'Delete Series Item',
-            `Are you sure you want to delete series item "${this.currentSeriesItem.item_number}: ${this.currentSeriesItem.record_series_title}"? This action cannot be undone.`
-        );
-        
-        if (!confirmed) return;
-        
-        try {
-            await this.deleteSeriesItem(this.currentSeriesItem._id);
-            this.setStatus('Series item deleted successfully', 'success');
-            await this.updateUI();
-            this.cancelSeriesEdit();
-        } catch (error) {
-            ErrorHandler.log(error, 'Delete series item', APP_CONSTANTS.ERROR_TYPES.DATABASE);
-            this.setStatus('Error deleting series item: ' + error.message, 'error');
-        }
-    }
-
-    // Modal Management
-    showModal(title, message, confirmCallback) {
-        const modal = document.getElementById('confirmModal');
-        const titleElement = document.getElementById('confirmTitle');
-        const messageElement = document.getElementById('confirmMessage');
-        const confirmBtn = document.getElementById('confirmBtn');
-
-        if (titleElement) titleElement.textContent = title;
-        if (messageElement) messageElement.textContent = message;
-        if (modal) modal.classList.remove('hidden');
-        
-        this.confirmCallback = confirmCallback;
-        
-        if (confirmBtn) confirmBtn.focus();
-    }
-
-    hideModal() {
-        const modal = document.getElementById('confirmModal');
-        if (modal) modal.classList.add('hidden');
-        this.confirmCallback = null;
-    }
-
-    handleConfirm() {
-        if (this.confirmCallback) {
-            this.confirmCallback();
-        }
-        this.hideModal();
-    }
-
-    // Utility Methods
     formatDateRange(startDate, endDate) {
         if (!startDate && !endDate) return 'No dates specified';
         if (!startDate) return `Through ${endDate}`;
@@ -3145,6 +2982,150 @@ class ILETSBApp {
             }
         }
     }
+
+    // Import Status Management
+    showImportStatus() {
+        document.getElementById('importStatusModal').classList.remove('hidden');
+    }
+
+    hideImportStatus() {
+        document.getElementById('importStatusModal').classList.add('hidden');
+    }
+
+    updateImportStatus(status) {
+        document.getElementById('importStatusCode').textContent = status;
+    }
+
+    updateImportCounts(schedules, series) {
+        document.getElementById('importSchedulesCount').textContent = schedules;
+        document.getElementById('importSeriesCount').textContent = series;
+    }
+
+    logImportMessage(message) {
+        const log = document.getElementById('importStatusLog');
+        log.value += `[${new Date().toLocaleTimeString()}] ${message}\n`;
+        log.scrollTop = log.scrollHeight;
+    }
+
+    clearImportLog() {
+        document.getElementById('importStatusLog').value = '';
+    }
+
+    // Modal Management
+    showModal(title, message, onConfirm, onCancel) {
+        const modal = document.getElementById('confirmModal');
+        const titleEl = document.getElementById('confirmTitle');
+        const messageEl = document.getElementById('confirmMessage');
+        const confirmBtn = document.getElementById('confirmBtn');
+        const cancelBtn = document.getElementById('cancelBtn');
+        
+        if (!modal || !titleEl || !messageEl || !confirmBtn || !cancelBtn) {
+            console.error('Modal elements not found');
+            return;
+        }
+        
+        titleEl.textContent = title;
+        messageEl.textContent = message;
+        
+        // Store callbacks for later use
+        this.modalCallbacks = { onConfirm, onCancel };
+        
+        modal.classList.remove('hidden');
+        confirmBtn.focus();
+    }
+
+    hideModal() {
+        const modal = document.getElementById('confirmModal');
+        if (modal) {
+            modal.classList.add('hidden');
+        }
+        this.modalCallbacks = null;
+    }
+
+    handleConfirm() {
+        if (this.modalCallbacks && this.modalCallbacks.onConfirm) {
+            this.modalCallbacks.onConfirm();
+        }
+        this.hideModal();
+    }
+
+    handleCancel() {
+        if (this.modalCallbacks && this.modalCallbacks.onCancel) {
+            this.modalCallbacks.onCancel();
+        }
+        this.hideModal();
+    }
+
+    async clearDatabase() {
+        try {
+            if (!this.db) {
+                await this.initDatabase();
+            }
+
+            // Clear all object stores
+            const transaction = this.db.transaction(['series', 'audit_events'], 'readwrite');
+            
+            const seriesStore = transaction.objectStore('series');
+            const auditStore = transaction.objectStore('audit_events');
+            
+            await Promise.all([
+                new Promise((resolve, reject) => {
+                    const request = seriesStore.clear();
+                    request.onsuccess = () => resolve();
+                    request.onerror = () => reject(request.error);
+                }),
+                new Promise((resolve, reject) => {
+                    const request = auditStore.clear();
+                    request.onsuccess = () => resolve();
+                    request.onerror = () => reject(request.error);
+                })
+            ]);
+
+            // Clear localStorage errors as well
+            localStorage.removeItem('iletsb_errors');
+            
+            // Refresh the UI
+            await this.loadDataOptimized();
+            this.updateStatusBar();
+            
+            // Show success message
+            this.setStatus('Database cleared successfully', 'success');
+            
+        } catch (error) {
+            ErrorHandler.log(error, 'Clear Database', APP_CONSTANTS.ERROR_TYPES.DATABASE);
+            this.setStatus('Failed to clear database', 'error');
+        }
+    }
+
+    setupImportStatusModal() {
+        const closeBtn = document.getElementById('closeImportStatus');
+        const closeFooterBtn = document.getElementById('importStatusCloseBtn');
+        const modal = document.getElementById('importStatusModal');
+        
+        if (closeBtn) {
+            closeBtn.addEventListener('click', () => this.hideImportStatus());
+        }
+        
+        if (closeFooterBtn) {
+            closeFooterBtn.addEventListener('click', () => this.hideImportStatus());
+        }
+        
+        // Close modal when clicking outside of it
+        if (modal) {
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    this.hideImportStatus();
+                }
+            });
+        }
+        
+        // Handle Escape key to close modal
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && modal && !modal.classList.contains('hidden')) {
+                this.hideImportStatus();
+            }
+        });
+    }
 }
 
 // Global error handlers
@@ -3154,7 +3135,7 @@ window.addEventListener('unhandledrejection', (event) => {
 });
 
 window.addEventListener('error', (event) => {
-    ErrorHandler.log(event.error, 'Global Error', APP_CONSTANTS.ERROR_TYPES.DATABASE);
+    ErrorHandler.log(event.error || event.message || 'Unknown error', 'Global Error', APP_CONSTANTS.ERROR_TYPES.DATABASE);
 });
 
 // Initialize the application when DOM is loaded

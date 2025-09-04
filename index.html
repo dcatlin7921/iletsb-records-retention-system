@@ -86,21 +86,12 @@
                             <option value="pending">Pending</option>
                             <option value="approved">Approved</option>
                             <option value="superseded">Superseded</option>
-                            <option value="denied">Denied</option>
                         </select>
                     </div>
 
                     <div class="form-group">
                         <label class="form-label">Retention Type</label>
                         <div class="checkbox-group">
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="permanentFilter">
-                                <span>Permanent Records</span>
-                            </label>
-                            <label class="checkbox-label">
-                                <input type="checkbox" id="termFilter">
-                                <span>Term Records</span>
-                            </label>
                         </div>
                     </div>
 
@@ -258,13 +249,6 @@
                             <div class="retention-section">
                                 <h4>Retention Information</h4>
                                 
-                                <div class="form-group">
-                                    <label class="checkbox-label retention-toggle">
-                                        <input type="checkbox" id="isPermanent">
-                                        <span>Permanent Retention</span>
-                                    </label>
-                                </div>
-
                                 <div class="form-group" id="retentionTermGroup">
                                     <label for="retentionTerm" class="form-label">Retention Term (years)</label>
                                     <input type="number" id="retentionTerm" class="form-control" min="0">
@@ -281,14 +265,6 @@
                                 </div>
 
                                 <div class="checkbox-group">
-                                    <label class="checkbox-label">
-                                        <input type="checkbox" id="auditHold">
-                                        <span>Audit Hold Required</span>
-                                    </label>
-                                    <label class="checkbox-label">
-                                        <input type="checkbox" id="litigationHold">
-                                        <span>Litigation Hold Required</span>
-                                    </label>
                                 </div>
                             </div>
 
@@ -298,15 +274,15 @@
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label for="volumePaper" class="form-label">Paper Volume (cu ft)</label>
-                                        <input type="number" id="volumePaper" class="form-control" step="0.1" min="0">
+                                        <input type="text" id="volumePaper" class="form-control">
                                     </div>
                                     <div class="form-group">
-                                        <label for="volumeElectronic" class="form-label">Electronic Volume (bytes)</label>
-                                        <input type="number" id="volumeElectronic" class="form-control" min="0">
+                                        <label for="volumeElectronic" class="form-label">Electronic Volume</label>
+                                        <input type="text" id="volumeElectronic" class="form-control">
                                         <div class="byte-converter">
-                                            <button type="button" class="converter-btn" data-multiplier="1024">KB</button>
-                                            <button type="button" class="converter-btn" data-multiplier="1048576">MB</button>
-                                            <button type="button" class="converter-btn" data-multiplier="1073741824">GB</button>
+                                            <button type="button" class="converter-btn" data-unit="KB">KB</button>
+                                            <button type="button" class="converter-btn" data-unit="MB">MB</button>
+                                            <button type="button" class="converter-btn" data-unit="GB">GB</button>
                                         </div>
                                     </div>
                                 </div>
@@ -314,15 +290,15 @@
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label for="annualPaper" class="form-label">Annual Accum. Paper (cu ft)</label>
-                                        <input type="number" id="annualPaper" class="form-control" step="0.1" min="0">
+                                        <input type="text" id="annualPaper" class="form-control">
                                     </div>
                                     <div class="form-group">
-                                        <label for="annualElectronic" class="form-label">Annual Accum. Electronic (bytes)</label>
-                                        <input type="number" id="annualElectronic" class="form-control" min="0">
+                                        <label for="annualElectronic" class="form-label">Annual Accum. Electronic</label>
+                                        <input type="text" id="annualElectronic" class="form-control">
                                         <div class="byte-converter">
-                                            <button type="button" class="converter-btn" data-multiplier="1024">KB</button>
-                                            <button type="button" class="converter-btn" data-multiplier="1048576">MB</button>
-                                            <button type="button" class="converter-btn" data-multiplier="1073741824">GB</button>
+                                            <button type="button" class="converter-btn" data-unit="KB">KB</button>
+                                            <button type="button" class="converter-btn" data-unit="MB">MB</button>
+                                            <button type="button" class="converter-btn" data-unit="GB">GB</button>
                                         </div>
                                     </div>
                                 </div>
@@ -430,14 +406,12 @@
                                     <option value="pending">Pending</option>
                                     <option value="approved">Approved</option>
                                     <option value="superseded">Superseded</option>
-                                    <option value="denied">Denied</option>
                                 </select>
                                 <div class="status-chips">
                                     <button type="button" class="chip" data-value="draft">Draft</button>
                                     <button type="button" class="chip" data-value="pending">Pending</button>
                                     <button type="button" class="chip" data-value="approved">Approved</button>
                                     <button type="button" class="chip" data-value="superseded">Superseded</button>
-                                    <button type="button" class="chip" data-value="denied">Denied</button>
                                 </div>
                             </div>
 
@@ -446,13 +420,20 @@
                                 <input type="date" id="approvalDate" class="form-control">
                             </div>
 
+                            <div class="form-group">
+                                <label for="scheduleDivision" class="form-label">Division</label>
+                                <input type="text" id="scheduleDivision" class="form-control">
+                            </div>
+
+                            <div class="form-group">
+                                <label for="scheduleTags" class="form-label">Tags</label>
+                                <input type="text" id="scheduleTags" class="form-control" placeholder="Separate with commas">
+                            </div>
 
                             <div class="form-group">
                                 <label for="scheduleNotes" class="form-label">Notes</label>
                                 <textarea id="scheduleNotes" class="form-control" rows="2"></textarea>
                             </div>
-
-
 
                             <div class="form-actions">
                                 <button type="submit" class="btn btn--primary">Save Schedule</button>
@@ -464,6 +445,39 @@
                 </div>
             </section>
         </main>
+
+        <!-- Import Status Modal -->
+        <div id="importStatusModal" class="modal hidden">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Import Status</h3>
+                    <button id="closeImportStatus" class="modal-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="status-summary">
+                        <div class="status-item">
+                            <span class="status-label">Status:</span>
+                            <span id="importStatusCode" class="status-value">Ready</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">Schedules:</span>
+                            <span id="importSchedulesCount" class="status-value">0</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-label">Series Items:</span>
+                            <span id="importSeriesCount" class="status-value">0</span>
+                        </div>
+                    </div>
+                    <div class="status-log">
+                        <label for="importStatusLog">Detailed Log:</label>
+                        <textarea id="importStatusLog" class="log-output" readonly></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button id="importStatusCloseBtn" class="btn btn--primary">Close</button>
+                </div>
+            </div>
+        </div>
 
         <!-- Status Bar -->
         <div class="status-bar" id="statusBar" role="status" aria-live="polite">
@@ -507,5 +521,4 @@
 
     <script src="app.js"></script>
 </body>
-</html>< s c r i p t > c o n s o l e . l o g ( ' C a s c a d e   d e b u g g i n g   e n a b l e d . ' ) ; < / s c r i p t >  
- 
+</html>
