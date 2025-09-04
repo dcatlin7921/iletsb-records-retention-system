@@ -8,7 +8,7 @@
   "schedules": [
     {
       "schedule_uid": "550e8400-e29b-41d4-a716-446655440001",
-      "application_number": "25-012",
+      "schedule_number": "25-012",
       "schedule_title": "Training Records Management Schedule",
       "approval_status": "approved",
       "approval_date": "2025-01-15",
@@ -21,7 +21,7 @@
     },
     {
       "schedule_uid": "550e8400-e29b-41d4-a716-446655440002", 
-      "application_number": "25-015",
+      "schedule_number": "25-015",
       "schedule_title": "Administrative and Financial Records Schedule",
       "approval_status": "pending",
       "approval_date": null,
@@ -35,7 +35,7 @@
   ],
   "series_items": [
     {
-      "application_number": "25-012",
+      "schedule_number": "25-012",
       "item_number": "100",
       "record_series_title": "Basic Law Enforcement Training Records",
       "description": "Records documenting completion of basic law enforcement training programs including curriculum, attendance, examination results, and certification issuance.",
@@ -43,8 +43,10 @@
       "dates_covered_start": "2020",
       "dates_covered_end": null,
       "open_ended": true,
-      "volume_annual_cubic_feet": 15.5,
-      "volume_annual_gigabytes": 2.3,
+      "volume_paper_cuft": 15.5,
+      "volume_electronic_bytes": 2469606195,
+      "annual_accum_paper_cuft": 5.2,
+      "annual_accum_electronic_bytes": 823202065,
       "media_types": ["paper", "electronic"],
       "retention": {
         "trigger": "end_of_fiscal_year",
@@ -71,7 +73,7 @@
       "updated_at": "2025-01-15T14:45:00.000Z"
     },
     {
-      "application_number": "25-012",
+      "schedule_number": "25-012",
       "item_number": "101", 
       "record_series_title": "Training Instructor Certification Files",
       "description": "Personnel files for certified training instructors including qualifications, certifications, performance evaluations, and continuing education records.",
@@ -79,8 +81,10 @@
       "dates_covered_start": "2018-01",
       "dates_covered_end": null,
       "open_ended": true,
-      "volume_annual_cubic_feet": 8.2,
-      "volume_annual_gigabytes": 1.1,
+      "volume_paper_cuft": 8.2,
+      "volume_electronic_bytes": 1181116006,
+      "annual_accum_paper_cuft": 2.7,
+      "annual_accum_electronic_bytes": 393705350,
       "media_types": ["paper", "electronic"],
       "retention": {
         "trigger": "superseded",
@@ -107,7 +111,7 @@
       "updated_at": "2025-01-15T15:00:00.000Z"
     },
     {
-      "application_number": "25-015",
+      "schedule_number": "25-015",
       "item_number": "200",
       "record_series_title": "Annual Budget and Financial Planning Documents",
       "description": "Comprehensive budget documentation including proposed budgets, budget justifications, financial projections, and approved budget allocations.",
@@ -115,8 +119,10 @@
       "dates_covered_start": "2022-07-01",
       "dates_covered_end": "2025-06-30",
       "open_ended": false,
-      "volume_annual_cubic_feet": 12.0,
-      "volume_annual_gigabytes": 5.7,
+      "volume_paper_cuft": 12.0,
+      "volume_electronic_bytes": 6123445248,
+      "annual_accum_paper_cuft": 4.0,
+      "annual_accum_electronic_bytes": 2041148416,
       "media_types": ["electronic", "paper"],
       "retention": {
         "trigger": "end_of_fiscal_year",
@@ -139,7 +145,7 @@
       "updated_at": "2025-02-15T17:00:00.000Z"
     },
     {
-      "application_number": "25-015",
+      "schedule_number": "25-015",
       "item_number": "201",
       "record_series_title": "Vendor Contract and Procurement Records",
       "description": "Documentation of vendor selection, contract negotiations, executed contracts, performance monitoring, and payment processing for goods and services.",
@@ -147,8 +153,10 @@
       "dates_covered_start": "2023",
       "dates_covered_end": null,
       "open_ended": true,
-      "volume_annual_cubic_feet": 6.8,
-      "volume_annual_gigabytes": 3.2,
+      "volume_paper_cuft": 6.8,
+      "volume_electronic_bytes": 3435973837,
+      "annual_accum_paper_cuft": 2.3,
+      "annual_accum_electronic_bytes": 1145324612,
       "media_types": ["electronic"],
       "retention": {
         "trigger": "case_closed",
