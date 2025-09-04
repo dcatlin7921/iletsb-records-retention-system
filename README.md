@@ -1,68 +1,69 @@
-# ILETSB Records Retention Inventory
+ILETSB Records Retention Inventory
 
-A comprehensive offline-first web application for managing Illinois Law Enforcement Training & Standards Board (ILETSB) records retention inventory that maps to approved Record Retention Schedules.
+An offline-first web app for managing ILETSB’s records-series inventory and assembling those series into approved Records Retention Schedules. The app lets you draft, edit, and perfect series; export them to schedule packages; then sync approvals (application numbers & item numbers) back into the database.
 
-## Features
+Features
 
-- **Offline-First Design**: Works completely offline using IndexedDB for local storage
-- **Three-Pane Interface**: Search/filters, results list, and detail editor
-- **JSON Backup/Restore**: Export and import all data as JSON files
-- **Advanced Search & Filtering**: Search across multiple fields with real-time results
-- **Accessibility Compliant**: Full keyboard navigation and screen reader support
-- **Audit Trail**: Complete logging of all create/update/delete operations
-- **Data Validation**: Comprehensive form validation with helpful error messages
+Offline-First: Works entirely in the browser via IndexedDB
 
-## Data Model Summary
+Three-Pane UI: Filters/search • Results list • Detail editor
 
-### Object Stores
+JSON Backup/Restore: Full export/import
 
-#### 1. Schedules
-- **Purpose**: Track record retention schedules and their approval status
-- **Key Fields**: 
-  - `application_number` (e.g., "19-022") - External identifier for linkage
-  - `application_title` - Human-readable title
-  - `approval_status` - draft|pending|approved|superseded
-  - `approval_date` - When schedule was approved
-  - `retention_statement_global` - Overall retention policy
-  - `source_pdf_name`, `source_pdf_url` - Reference documents
-- **Indexes**: application_number, approval_status, approval_date
+Advanced Filters: Division, permanence, dates, tags, free text
 
-#### 2. Series Items
-- **Purpose**: Individual record series within schedules
-- **Key Fields**:
-  - `application_number` - Links to parent schedule
-  - `item_number` - Series identifier (e.g., "100.01")
-  - `record_series_title` - Name of the record series
-  - `retention_text` - Detailed retention instructions
-  - `retention_term` - Number of years (if not permanent)
-  - `retention_is_permanent` - Boolean flag for permanent records
-  - `volume_paper_cuft`, `volume_electronic_bytes` - Storage volume metrics
-  - `division`, `contact`, `location` - Organizational information
-- **Indexes**: application_number, item_number, division, retention_is_permanent, retention_term, record_series_title
+Accessibility: Keyboard navigation, screen-reader labels
 
-#### 3. Audit Events
-- **Purpose**: Track all user actions for accountability
-- **Fields**: entity (schedule|series), entity_id, action, actor, timestamp, payload
+Audit Trail: Create/update/delete events
 
-## How to Use Import/Export
+Data Validation: Guardrails with clear messages
 
-### Export Data
-1. Click the "Export JSON" button in the top navigation
-2. Browser will download a complete backup file named `iletsb-records-backup-YYYY-MM-DD.json`
-3. File contains all schedules, series items, and audit events
+What this database is (purpose)
 
-### Import Data
-1. Click "Import JSON" button and select a valid backup file
-2. System validates the file format and shows import summary
-3. Data is upserted based on `(application_number, item_number)` combinations
-4. Existing records are updated; new records are created with fresh internal keys
-5. Import process is logged in audit trail
+This is a working inventory of record series for ILETSB. Staff use it to collect, edit, and refine every series (title, description, dates, retention, media, volume, contacts, notes). When ready, selected series are exported into an official Records Retention Schedule. After approval, the schedule’s application number (e.g., 25-012) and the official item numbers are synced back so the inventory reflects the approved record.
 
-### JSON Format Structure
-```json
+Data Model (summary)
+Schedules (1) ────< (many) SeriesItems
+         \
+          \───< AuditEvents   (also used for SeriesItems)
+
+
+A Schedule is the approved rulebook (e.g., application “25-012”).
+
+A SeriesItem is one approved row (item “1”, “2”, …) on that schedule.
+
+AuditEvents capture who changed what and when.
+
+See full field reference in Record Retention DB Schema (v2) below.
+
+Getting Started
+
+Open index.html in a Chromium-based browser (Chrome/Edge).
+
+The app initializes IndexedDB and (optionally) loads sample data.
+
+Create a Schedule (draft is fine; application number can be added after approval).
+
+Add Series Items by selecting an existing schedule from the UI (don’t free-type schedule numbers).
+
+Use filters/search to find items; click a result to view/edit details.
+
+Important: Series are linked by schedule_id (the schedule’s internal _id). You should not create series by free-typing a schedule number—pick the schedule from the list so the relationship stays correct.
+
+Import / Export
+Export
+
+Click Export JSON.
+
+A file like iletsb-records-backup-YYYY-MM-DD.json downloads.
+
+It includes schedules, series_items, and audit_events.
+
+Export format
+
 {
   "exported_at": "2025-09-02T11:00:00-05:00",
-  "version": 1,
+  "version": 2,
   "agency": {
     "name": "Illinois Law Enforcement Training and Standards Board",
     "abbrev": "ILETSB"
@@ -71,120 +72,233 @@ A comprehensive offline-first web application for managing Illinois Law Enforcem
   "series_items": [...],
   "audit_events": [...]
 }
-```
 
-## Getting Started
+Import (how upserts work)
 
-### Basic Usage
-1. Open `index.html` in Chrome or Edge browser
-2. Application initializes with sample data for demonstration
-3. Use "New Schedule" to create retention schedules
-4. Use "New Series Item" to add record series to schedules
-5. Use search and filters to find specific records
-6. Click any result to view/edit in the detail pane
+Click Import JSON and choose a valid backup.
 
-### Creating Records
-1. **New Schedule**: Creates a schedule record where you can later assign the official application number
-2. **New Series Item**: Select an existing application number or enter a new one to create associated record series
+The app validates the file and shows a summary.
 
-### Search and Filtering
-- **Free Text Search**: Searches across record titles, descriptions, and retention text
-- **Application Number**: Filter by specific schedule
-- **Division**: Filter by organizational division
-- **Retention Type**: Filter permanent vs. time-limited records
-- **Date Ranges**: Filter by approval dates or coverage dates
-- **Combined Filters**: All filters work together with AND logic
+Schedules
 
-## Key Limitations
+If application_number exists, we upsert by application_number.
 
-### Technical Constraints
-- **Browser Compatibility**: Requires Chrome or Edge (latest versions)
-- **Storage Limit**: Subject to browser IndexedDB quotas (typically 1GB+)
-- **Single User**: Designed for single-user operation, no collaboration features
-- **No Server Sync**: Pure offline application, no network synchronization
+If it’s a draft (no application_number), we create a new schedule.
 
-### Data Constraints
-- **Agency Fixed**: Application is specifically for ILETSB only
-- **No Multi-tenancy**: Cannot manage records for multiple agencies
-- **Simple Relationships**: Division/Contact/Location stored as text fields, not normalized
+Series Items
 
-### Functional Limitations
-- **PDF Storage**: Can reference PDF files but doesn't store actual file content
-- **No Version Control**: Updates overwrite previous versions (except via audit log)
-- **Limited Reporting**: No built-in report generation beyond export
+The importer first builds a map of old ⇒ new schedule_id by matching schedule application_number (or newly created IDs for drafts).
 
-## How to Reset Database
+Then it upserts series by the composite key [schedule_id + item_number].
 
-### Complete Reset
-1. Open browser Developer Tools (F12)
-2. Go to Application/Storage tab
-3. Find IndexedDB → ILETSBRecords
-4. Right-click and "Delete database"
-5. Refresh the page to reinitialize with sample data
+If a conflict exists (same item_number for the same schedule), the record is updated.
 
-### Selective Reset
-- Use the import function with an empty or minimal JSON file
-- Delete individual records using the detail editor
-- Use browser's IndexedDB inspector to manually remove specific records
+Audit Events
 
-## Advanced Features
+Imported as additional history entries (internal _ids are regenerated).
 
-### Form Validation
-- **Date Formats**: Accepts YYYY or full ISO dates (YYYY-MM-DD)
-- **Mutual Exclusivity**: Permanent retention and term years cannot both be set
-- **Numeric Formatting**: Automatically strips commas from numbers
-- **Required Fields**: Validates essential fields before saving
+Notes
 
-### Accessibility Features
-- **Keyboard Navigation**: Full Tab/Shift+Tab support
-- **Shortcuts**: Enter to save, Escape to cancel
-- **Screen Readers**: Proper ARIA labels and descriptions
-- **Focus Management**: Visual focus indicators throughout interface
+Internal numeric _ids are not portable across machines; the importer ignores incoming _id and creates fresh ones.
 
-### Performance Optimizations
-- **Virtual Scrolling**: Handles 1000+ records efficiently
-- **Indexed Queries**: Uses IndexedDB indexes for fast filtering
-- **Debounced Search**: 300ms delay prevents excessive queries
-- **Lazy Loading**: Detail forms only load when item is selected
+For drafts with no application_number, the importer treats them as new schedules unless you enable an optional “merge by title” mode (if/when implemented).
 
-## Data Privacy and Security
+Search & Filtering
 
-- **Local Only**: All data stored locally in browser, never transmitted
-- **No Analytics**: No tracking or external analytics
-- **Audit Trail**: Complete record of all user actions
-- **Data Integrity**: Validation prevents corrupt data entry
+Free Text: Titles, descriptions, retention text
 
-## Troubleshooting
+Schedule: Pick a schedule (shows drafts & approved)
 
-### Common Issues
-1. **Application Won't Load**: Clear browser cache and refresh
-2. **Import Fails**: Verify JSON file format matches export structure
-3. **Search Not Working**: Check that IndexedDB is supported and enabled
-4. **Performance Issues**: Close other browser tabs, clear browser data
+Division: Filter by organizational division
 
-### Browser Requirements
-- JavaScript enabled
-- IndexedDB support
-- Local file access (for import/export)
-- Minimum 1920×1080 screen resolution recommended
+Retention: Permanent vs time-limited
 
-## File Structure
+Dates: Approval dates (schedules) and coverage dates (series)
 
-```
+Tags: Multi-select (schedule tags)
+
+Key Limitations
+
+Technical
+
+Chromium browser required (Chrome/Edge latest)
+
+IndexedDB storage quotas apply (~1GB+, browser-dependent)
+
+Single-user, no live sync
+
+Data
+
+Agency is ILETSB-specific (no multi-tenancy)
+
+Division/Contact/Location are simple text fields (not normalized)
+
+Functional
+
+PDF content is referenced, not stored
+
+No version branching (history via audit log only)
+
+Reporting is limited to exports for now
+
+Resetting the Database
+
+Complete reset
+
+DevTools → Application/Storage
+
+IndexedDB → ILETSBRecords → Delete database
+
+Refresh the page
+
+Selective reset
+
+Import a minimal JSON file, or
+
+Delete individual records in the UI
+
+Advanced Details
+Validation (high-level)
+
+approval_status is a lowercase enum: draft | submitted | approved | superseded | denied.
+
+application_number matches ^\d{2}-\d{3}$ when present (drafts may be null).
+
+item_number supports integers (extend to sub-items later if needed).
+
+Coverage dates are ISO; for ongoing series, set dates_covered_end = null and open_ended = true.
+
+Structured retention is required:
+
+trigger enum (e.g., end_of_fiscal_year, calendar_year_end, case_closed)
+
+stages[] like { where: "office" | "records_center" | "system", years: number }
+
+final_disposition is one of destroy | transfer_archives | permanent
+
+retention_is_permanent can be derived but is kept for fast filters
+
+Arrays only (no semicolon strings) for tags, media_types, omb_or_statute_refs, related_series.
+
+Performance
+
+Indexed queries (Dexie/IndexedDB)
+
+Debounced search (≈300ms)
+
+Virtualized lists for 1k+ rows
+
+Privacy/Security
+
+Local only—no network calls
+
+No analytics or trackers
+
+Full audit trail kept locally
+
+File Structure
 iletsb-records-inventory/
-├── index.html          # Main application file
-├── style.css           # Application styles
-├── app.js              # Core application logic
-├── README.md           # This documentation
-└── sample-data.json    # Sample data for testing
-```
+├── index.html          # App shell
+├── style.css           # Styles
+├── app.js              # Core logic (DB, import/export, audit, UI glue)
+├── README.md           # This document
+└── sample-data.json    # Optional sample dataset
 
-## Version History
 
-- **v1.0** (2025-09-02): Initial release with full feature set
-  - Three-pane interface
-  - IndexedDB storage
-  - JSON import/export
-  - Comprehensive search and filtering
-  - Audit trail
-  - Accessibility compliance
+(If you split UI into separate modules like app-ui.js, update this tree accordingly.)
+
+Record Retention DB Schema (v2)
+
+Dexie definition
+
+db.version(2).stores({
+  schedules: '++_id, application_number, approval_status, approval_date, *tags',
+  series_items: '++_id, schedule_id, [schedule_id+item_number], division, record_series_title, retention_is_permanent',
+  audit_events: '++_id, [entity+entity_id+at], entity, action, at'
+});
+
+schedules
+
+PK: ++_id
+
+Unique: application_number (when present)
+
+Indexes: approval_status, approval_date, tags (multiEntry)
+
+Fields:
+_id, application_number (nullable for drafts), application_title, approving_body, approval_status, approval_date, retention_statement_global, notes, source_pdf_name, source_pdf_url, source_pdf_page_count, tags[], created_at, updated_at.
+
+series_items
+
+PK: ++_id
+
+FK: schedule_id → schedules._id
+
+Composite unique: [schedule_id + item_number]
+
+Indexes: schedule_id, division, record_series_title, retention_is_permanent
+
+Fields:
+_id, schedule_id, application_number (optional display), item_number, record_series_title, description, dates_covered_start, dates_covered_end|null, open_ended, arrangement, division, contact, location,
+retention { trigger, stages[], final_disposition }, retention_text, retention_is_permanent,
+volume_paper_cuft, volume_electronic_bytes, annual_accum_paper_cuft, annual_accum_electronic_bytes,
+media_types[], electronic_records_standard, number_size_files, index_or_finding_aids,
+omb_or_statute_refs[], related_series[],
+audit_hold_required, litigation_hold_required,
+representative_name, representative_title, representative_phone,
+records_officer_name, records_officer_phone, series_notes,
+created_at, updated_at.
+
+audit_events
+
+PK: ++_id
+
+Compound index: [entity + entity_id + at]
+
+Fields:
+_id, entity ("schedule" | "series"), entity_id, action ("create" | "update" | "delete"), actor, at, payload (JSON string).
+
+Version History
+
+v2.0 (2025-09-04)
+
+Real FK series_items.schedule_id
+
+Composite unique [schedule_id + item_number]
+
+Removed duplicate fields (schedule_number, series_number)
+
+Structured retention object; retention_text kept for humans
+
+tags is multiEntry; list-type fields are arrays
+
+Importer upserts schedules by application_number and series by [schedule_id + item_number]
+
+v1.0 (2025-09-02)
+
+Initial release (three-pane UI, IndexedDB, JSON import/export, search, audit, accessibility)
+
+Common Queries (examples)
+
+Get all series for a schedule
+
+const schedule = await db.schedules.get({ application_number: '25-012' });
+const series = await db.series_items.where('schedule_id').equals(schedule._id).toArray();
+
+
+Insert a series with uniqueness check
+
+await db.series_items.add({
+  schedule_id,
+  item_number: '1',
+  record_series_title: 'Officer Training Rosters',
+  /* ... */
+}); // throws if [schedule_id + item_number] exists
+
+
+Fetch audit history (ordered)
+
+const history = await db.audit_events
+  .where('[entity+entity_id+at]')
+  .between(['series', id, Dexie.minKey], ['series', id, Dexie.maxKey])
+  .toArray();

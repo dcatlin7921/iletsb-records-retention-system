@@ -21,7 +21,6 @@
                         <span aria-hidden="true">▾</span>
                     </button>
                     <div class="dropdown hidden" id="adminDropdown" role="menu" aria-labelledby="adminMenuBtn">
-                        <button class="dropdown-item" id="newScheduleBtn" role="menuitem">New Schedule</button>
                         <button class="dropdown-item" id="newSeriesBtn" role="menuitem">New Series Item</button>
                         <hr class="dropdown-sep" aria-hidden="true">
                         <button class="dropdown-item" id="exportBtn" role="menuitem">Export JSON</button>
@@ -52,6 +51,7 @@
                                 <path d="M4 2L8 6L4 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
                             </svg>
                         </button>
+                        <span class="collapsed-label" aria-hidden="true">Search</span>
                     </div>
                     
                     <div class="form-group">
@@ -152,7 +152,7 @@
                         <select id="sortBy" class="form-control" aria-label="Sort results by">
                             <option value="item_number">Item Number</option>
                             <option value="record_series_title">Series Title</option>
-                            <option value="application_number">Application Number</option>
+                            <option value="application_number">Schedule Number</option>
                             <option value="division">Division</option>
                         </select>
                     </div>
@@ -160,7 +160,7 @@
                 
                 <div class="results-container" id="resultsContainer" role="region" aria-label="Search results">
                     <div class="results-table-header" role="row">
-                        <div class="col-app-num" role="columnheader">App #</div>
+                        <div class="col-app-num" role="columnheader">Schedule #</div>
                         <div class="col-item-num" role="columnheader">Item #</div>
                         <div class="col-title" role="columnheader">Series Title</div>
                         <div class="col-division" role="columnheader">Division</div>
@@ -276,7 +276,9 @@
                             <div class="form-row">
                                 <div class="form-group">
                                     <label for="seriesAppNum" class="form-label">Schedule Number</label>
-                                    <input type="text" id="seriesAppNum" class="form-control" placeholder="e.g., 19-022" required>
+                                    <select id="seriesAppNum" class="form-control" required aria-label="Select Schedule Number">
+                                        <option value="">Select a schedule…</option>
+                                    </select>
                                 </div>
                                 <div class="form-group">
                                     <label for="itemNumber" class="form-label">Series Number</label>

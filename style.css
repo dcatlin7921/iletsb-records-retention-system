@@ -822,7 +822,8 @@ select.form-control {
 /* Main Content - Three Panes */
 .main-content {
   display: grid;
-  grid-template-columns: 280px 0.6fr 500px;
+  /* Left rail fixed, center flexible, right pane gets the largest share */
+  grid-template-columns: 280px minmax(420px, 1fr) minmax(520px, 2fr);
   gap: 0;
   flex: 1;
   overflow: hidden;
@@ -835,7 +836,8 @@ select.form-control {
   /* Remove inter-column gap entirely when collapsed to avoid visible gutter */
   gap: 0 !important;
   /* Make the left rail only as wide as the toggle button */
-  grid-template-columns: 48px minmax(0, 1fr) minmax(400px, 1fr) !important;
+  /* Center grows, right grows more and has a sensible minimum */
+  grid-template-columns: 48px minmax(0, 1fr) minmax(400px, 1.75fr) !important;
 }
 
 /* Left Pane - Search & Filters */
@@ -858,6 +860,7 @@ select.form-control {
   padding: 0;
   overflow: hidden;
   background: transparent;
+  position: relative; /* Create containing block for the collapsed label */
 }
 
 /* Search header with toggle button */
@@ -909,13 +912,13 @@ select.form-control {
   color: currentColor;
 }
 
-/* Rotate caret - point right when expanded (panel will move right), point left when collapsed (panel will move left) */
+/* Rotate caret - point right when expanded, point left when collapsed */
 .search-pane:not(.collapsed) .search-toggle-btn .caret {
-  transform: rotate(180deg);
+  transform: rotate(0deg);
 }
 
 .search-pane.collapsed .search-toggle-btn .caret {
-  transform: rotate(0deg);
+  transform: rotate(180deg);
 }
 
 /* Hide content when collapsed */
@@ -930,6 +933,11 @@ select.form-control {
   padding: var(--space-8) 0;
 }
 
+/* When collapsed, let the label position relative to the pane, not the header */
+.search-pane.collapsed .search-header {
+  position: static;
+}
+
 .search-pane.collapsed .search-header h3 {
   display: none;
 }
@@ -939,6 +947,26 @@ select.form-control {
   position: relative;
   z-index: 10;
   margin: var(--space-4) auto;
+}
+
+/* Collapsed label: hidden by default, appears when search pane is collapsed */
+.collapsed-label {
+  display: none;
+}
+
+.search-pane.collapsed .collapsed-label {
+  display: block;
+  position: absolute;
+  top: 72px; /* Place just below the caret/toggle button */
+  left: 50%;
+  transform: translateX(-50%) rotate(-90deg);
+  transform-origin: center;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.08em;
+  color: var(--color-text-secondary);
+  pointer-events: none; /* Don't block clicks to the toggle button */
+  user-select: none;
 }
 
 .search-section h3 {
@@ -1911,10 +1939,8 @@ select.form-control {
 /* Large Desktop */
 @media (min-width: 1441px) {
     .main-content {
-        grid-template-columns: 350px 1fr 500px;
+        grid-template-columns: 350px minmax(420px, 1fr) minmax(520px, 2fr);
         gap: var(--space-24);
-        max-width: 1800px;
-        margin: 0 auto;
     }
     
     .search-pane {
@@ -2171,12 +2197,13 @@ select.form-control {
 /* --- Collapsed Layout Final Overrides (placed at end to win cascade) --- */
 .main-content.search-collapsed {
   gap: 0 !important;
-  grid-template-columns: 48px minmax(0, 1fr) minmax(400px, 1fr) !important;
+  /* Ensure right pane expands more than center when collapsed */
+  grid-template-columns: 48px minmax(0, 1fr) minmax(400px, 1.75fr) !important;
 }
 
 @media (min-width: 769px) and (max-width: 1024px) {
   .main-content.search-collapsed {
-    grid-template-columns: 48px minmax(0, 1fr) minmax(350px, 1fr) !important;
+    grid-template-columns: 48px minmax(0, 1fr) minmax(350px, 1.5fr) !important;
   }
 }
 

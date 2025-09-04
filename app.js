@@ -6,7 +6,7 @@
  */
 const APP_CONSTANTS = {
     DB_NAME: 'ILETSBRecords',
-    DB_VERSION: 1,
+    DB_VERSION: 2,
     VIRTUAL_SCROLL_ITEM_HEIGHT: 80,
     VIRTUAL_SCROLL_BUFFER: 5,
     SEARCH_DEBOUNCE_MS: 300,
@@ -21,6 +21,12 @@ const APP_CONSTANTS = {
         IMPORT: 'IMPORT_ERROR',
         EXPORT: 'EXPORT_ERROR',
         NETWORK: 'NETWORK_ERROR'
+    },
+    APPROVAL_STATUS: {
+        DRAFT: 'draft',
+        SUBMITTED: 'submitted',
+        APPROVED: 'approved',
+        REJECTED: 'rejected'
     }
 };
 
@@ -147,6 +153,7 @@ class ILETSBApp {
             await this.loadSampleData();
             this.initEventListeners();
             this.restoreSearchPaneState();
+            await this.migrateData();
             this.updateUI();
             this.setStatus('Ready');
         } catch (error) {
@@ -168,32 +175,65 @@ class ILETSBApp {
 
             request.onupgradeneeded = (event) => {
                 const db = event.target.result;
+                const oldVersion = event.oldVersion;
 
                 // Create schedules object store
                 if (!db.objectStoreNames.contains('schedules')) {
                     const scheduleStore = db.createObjectStore('schedules', { autoIncrement: true });
-                    scheduleStore.createIndex('schedule_number', 'schedule_number', { unique: true });
+                    scheduleStore.createIndex('application_number', 'application_number', { unique: true });
                     scheduleStore.createIndex('approval_status', 'approval_status', { unique: false });
                     scheduleStore.createIndex('approval_date', 'approval_date', { unique: false });
+                    scheduleStore.createIndex('tags', 'tags', { unique: false, multiEntry: true });
+                } else if (oldVersion < 2) {
+                    // Migration for existing schedules store
+                    const transaction = event.target.transaction;
+                    const scheduleStore = transaction.objectStore('schedules');
+                    
+                    // Remove old indices
+                    try { scheduleStore.deleteIndex('schedule_number'); } catch (e) {}
+                    
+                    // Add new indices
+                    try { scheduleStore.createIndex('application_number', 'application_number', { unique: true }); } catch (e) {}
+                    try { scheduleStore.createIndex('tags', 'tags', { unique: false, multiEntry: true }); } catch (e) {}
                 }
 
                 // Create series_items object store
                 if (!db.objectStoreNames.contains('series_items')) {
                     const seriesStore = db.createObjectStore('series_items', { autoIncrement: true });
-                    seriesStore.createIndex('schedule_number', 'schedule_number', { unique: false });
-                    seriesStore.createIndex('series_number', 'series_number', { unique: true });
+                    seriesStore.createIndex('schedule_id', 'schedule_id', { unique: false });
+                    seriesStore.createIndex('schedule_item', ['schedule_id', 'item_number'], { unique: true });
                     seriesStore.createIndex('division', 'division', { unique: false });
                     seriesStore.createIndex('retention_is_permanent', 'retention_is_permanent', { unique: false });
-                    seriesStore.createIndex('retention_term', 'retention_term', { unique: false });
                     seriesStore.createIndex('record_series_title', 'record_series_title', { unique: false });
+                } else if (oldVersion < 2) {
+                    // Migration for existing series_items store
+                    const transaction = event.target.transaction;
+                    const seriesStore = transaction.objectStore('series_items');
+                    
+                    // Remove old indices
+                    try { seriesStore.deleteIndex('schedule_number'); } catch (e) {}
+                    try { seriesStore.deleteIndex('series_number'); } catch (e) {}
+                    try { seriesStore.deleteIndex('retention_term'); } catch (e) {}
+                    
+                    // Add new indices
+                    try { seriesStore.createIndex('schedule_id', 'schedule_id', { unique: false }); } catch (e) {}
+                    try { seriesStore.createIndex('schedule_item', ['schedule_id', 'item_number'], { unique: true }); } catch (e) {}
                 }
 
                 // Create audit_events object store
                 if (!db.objectStoreNames.contains('audit_events')) {
                     const auditStore = db.createObjectStore('audit_events', { autoIncrement: true });
+                    auditStore.createIndex('entity_action_date', ['entity', 'entity_id', 'at'], { unique: false });
                     auditStore.createIndex('entity', 'entity', { unique: false });
                     auditStore.createIndex('action', 'action', { unique: false });
                     auditStore.createIndex('at', 'at', { unique: false });
+                } else if (oldVersion < 2) {
+                    // Migration for existing audit_events store
+                    const transaction = event.target.transaction;
+                    const auditStore = transaction.objectStore('audit_events');
+                    
+                    // Add new compound index
+                    try { auditStore.createIndex('entity_action_date', ['entity', 'entity_id', 'at'], { unique: false }); } catch (e) {}
                 }
             };
         });
@@ -203,6 +243,150 @@ class ILETSBApp {
         // Sample data loading has been disabled to prevent automatic data population
         // If you need sample data, use the import functionality instead
         return;
+    }
+
+    async migrateData() {
+        try {
+            const schedules = await this.getAllSchedules();
+            const seriesItems = await this.getAllSeriesItems();
+            
+            // Step 1: Migrate schedules - normalize approval_status and remove deprecated fields
+            for (const schedule of schedules) {
+                let needsUpdate = false;
+                
+                // Normalize approval_status to lowercase enum
+                if (schedule.approval_status && typeof schedule.approval_status === 'string') {
+                    const normalized = schedule.approval_status.toLowerCase();
+                    if (Object.values(APP_CONSTANTS.APPROVAL_STATUS).includes(normalized)) {
+                        schedule.approval_status = normalized;
+                        needsUpdate = true;
+                    }
+                }
+                
+                // Remove deprecated schedule_number field
+                if ('schedule_number' in schedule) {
+                    delete schedule.schedule_number;
+                    needsUpdate = true;
+                }
+                
+                // Ensure tags is an array
+                if (schedule.tags && typeof schedule.tags === 'string') {
+                    schedule.tags = schedule.tags.split(',').map(t => t.trim()).filter(t => t);
+                    needsUpdate = true;
+                } else if (!Array.isArray(schedule.tags)) {
+                    schedule.tags = [];
+                    needsUpdate = true;
+                }
+                
+                if (needsUpdate) {
+                    await this.saveSchedule(schedule, true);
+                }
+            }
+            
+            // Step 2: Migrate series items - add schedule_id FK and normalize fields
+            for (const item of seriesItems) {
+                let needsUpdate = false;
+                
+                // Add schedule_id foreign key
+                if (!item.schedule_id) {
+                    const scheduleRef = item.application_number || item.schedule_number;
+                    if (scheduleRef) {
+                        const relatedSchedule = schedules.find(s => s.application_number === scheduleRef);
+                        if (relatedSchedule) {
+                            item.schedule_id = relatedSchedule._id;
+                            needsUpdate = true;
+                        }
+                    }
+                }
+                
+                // Remove deprecated fields
+                if ('schedule_number' in item) {
+                    delete item.schedule_number;
+                    needsUpdate = true;
+                }
+                if ('series_number' in item) {
+                    delete item.series_number;
+                    needsUpdate = true;
+                }
+                
+                // Normalize dates_covered fields
+                if (item.dates_covered_start === 'present') {
+                    item.dates_covered_start = null;
+                    item.open_ended_start = true;
+                    needsUpdate = true;
+                }
+                if (item.dates_covered_end === 'present') {
+                    item.dates_covered_end = null;
+                    item.open_ended_end = true;
+                    needsUpdate = true;
+                }
+                
+                // Convert string lists to arrays
+                const listFields = ['media_types', 'related_series', 'omb_or_statute_refs'];
+                for (const field of listFields) {
+                    if (item[field] && typeof item[field] === 'string') {
+                        item[field] = item[field].split(/[,;]/).map(s => s.trim()).filter(s => s);
+                        needsUpdate = true;
+                    } else if (!Array.isArray(item[field])) {
+                        item[field] = [];
+                        needsUpdate = true;
+                    }
+                }
+                
+                // Structure retention object
+                if (!item.retention || typeof item.retention !== 'object') {
+                    item.retention = {
+                        trigger: item.retention_trigger || '',
+                        stages: [],
+                        final_disposition: item.retention_is_permanent ? 'permanent' : 'destroy'
+                    };
+                    
+                    // Parse retention_text into stages if available
+                    if (item.retention_text) {
+                        const stages = this.parseRetentionStages(item.retention_text);
+                        item.retention.stages = stages;
+                    }
+                    
+                    needsUpdate = true;
+                }
+                
+                if (needsUpdate) {
+                    await this.saveSeriesItem(item, true);
+                }
+            }
+            
+            console.log('Data migration completed successfully');
+        } catch (error) {
+            ErrorHandler.log(error, 'Data migration');
+            console.error('Migration failed:', error);
+        }
+    }
+    
+    parseRetentionStages(retentionText) {
+        // Simple parser for retention text like "Retain 2 years, then transfer 4 years, then destroy"
+        const stages = [];
+        const text = retentionText.toLowerCase();
+        
+        // Look for patterns like "retain X years", "transfer X years", etc.
+        const patterns = [
+            /retain\s+(\d+)\s+years?/,
+            /transfer.*?(\d+)\s+years?/,
+            /destroy/,
+            /permanent/
+        ];
+        
+        let match;
+        if (match = text.match(/retain\s+(\d+)\s+years?/)) {
+            stages.push({ action: 'retain_in_office', duration_years: parseInt(match[1]) });
+        }
+        if (match = text.match(/transfer.*?(\d+)\s+years?/)) {
+            stages.push({ action: 'transfer_to_records_center', duration_years: parseInt(match[1]) });
+        }
+        if (text.includes('destroy')) {
+            stages.push({ action: 'destroy_securely' });
+        }
+        
+        return stages;
     }
 
     // Database Operations
@@ -245,7 +429,7 @@ class ILETSBApp {
             request.onsuccess = () => {
                 const id = request.result;
                 schedule._id = id;
-                this.logAuditEvent('schedule', id, isUpdate ? 'update' : 'create', { schedule_number: schedule.schedule_number });
+                this.logAuditEvent('schedule', id, isUpdate ? 'update' : 'create', { application_number: schedule.application_number });
                 resolve(schedule);
             };
             request.onerror = () => reject(request.error);
@@ -269,8 +453,8 @@ class ILETSBApp {
                 const id = request.result;
                 item._id = id;
                 this.logAuditEvent('series', id, isUpdate ? 'update' : 'create', { 
-                    schedule_number: item.schedule_number, 
-                    series_number: item.series_number 
+                    application_number: item.application_number, 
+                    item_number: item.item_number 
                 });
                 resolve(item);
             };
@@ -347,7 +531,7 @@ class ILETSBApp {
                 }
                 
                 if (filters.scheduleNumber) {
-                    items = items.filter(item => item.schedule_number === filters.scheduleNumber);
+                    items = items.filter(item => item.application_number === filters.scheduleNumber);
                 }
                 
                 if (filters.division) {
@@ -376,7 +560,10 @@ class ILETSBApp {
     // UI Event Handlers
     initEventListeners() {
         // Top navigation
-        document.getElementById('newScheduleBtn').addEventListener('click', () => this.createNewSchedule());
+        const newScheduleBtn = document.getElementById('newScheduleBtn');
+        if (newScheduleBtn) {
+            newScheduleBtn.addEventListener('click', () => this.createNewSchedule());
+        }
         document.getElementById('newSeriesBtn').addEventListener('click', () => this.createNewSeriesItem());
         document.getElementById('exportBtn').addEventListener('click', () => this.exportData());
         document.getElementById('importBtn').addEventListener('click', (e) => {
@@ -642,8 +829,31 @@ class ILETSBApp {
             this.schedules = await this.getAllSchedules();
             this.seriesItems = await this.getAllSeriesItems();
             this.filteredItems = [...this.seriesItems];
+
+            // Normalize existing records so relationships are consistent
+            await this.normalizeExistingData();
             
             this.populateFilterDropdowns();
+            // Keep the Series form schedule dropdown in sync with schedules
+            if (typeof this.populateSeriesScheduleDropdown === 'function') {
+                this.populateSeriesScheduleDropdown();
+            }
+            // Diagnostic: log series items whose schedule reference has no matching schedule
+            try {
+                const scheduleSet = this.getScheduleNumberSet();
+                const orphans = this.seriesItems.filter(si => {
+                    const ref = si.application_number;
+                    return !!ref && !scheduleSet.has(ref);
+                });
+                if (orphans.length > 0) {
+                    // Non-fatal notice in console and UI status for awareness
+                    console.warn('Orphan series items (no matching schedule):', orphans.map(o => ({ id: o._id, scheduleRef: o.application_number, item: o.item_number, title: o.record_series_title })));
+                    this.setStatus(`${orphans.length} series item(s) reference a missing schedule.`, 'warning');
+                }
+            } catch (diagErr) {
+                // Do not block UI if diagnostics fail
+                console.warn('Diagnostics failed', diagErr);
+            }
             this.renderResults();
             this.updateResultsSummary();
             this.updateRecordCount();
@@ -654,7 +864,7 @@ class ILETSBApp {
 
     populateFilterDropdowns() {
         // Schedule numbers
-        const scheduleNumbers = [...new Set(this.schedules.map(s => s.schedule_number).filter(n => n))];
+        const scheduleNumbers = [...new Set(this.schedules.map(s => s.application_number).filter(n => n))];
         const scheduleSelect = document.getElementById('applicationFilter');
         if (scheduleSelect) {
             DOMHelper.clearElement(scheduleSelect);
@@ -673,6 +883,67 @@ class ILETSBApp {
             divisions.forEach(div => {
                 divSelect.appendChild(DOMHelper.createOption(div, div));
             });
+        }
+    }
+
+    // Populate the Series form Schedule Number dropdown with existing schedules
+    populateSeriesScheduleDropdown() {
+        const select = document.getElementById('seriesAppNum');
+        if (!select) return;
+
+        // Build unique list from schedules
+        const scheduleNumbers = [...new Set(
+            (this.schedules || []).map(s => s.application_number).filter(Boolean)
+        )].sort();
+
+        const currentValue = select.value;
+        DOMHelper.clearElement(select);
+        select.appendChild(DOMHelper.createOption('', 'Select a schedule…'));
+        scheduleNumbers.forEach(num => {
+            select.appendChild(DOMHelper.createOption(num, num));
+        });
+
+        // Try to restore previous selection if still available
+        if (currentValue && scheduleNumbers.includes(currentValue)) {
+            select.value = currentValue;
+        }
+    }
+
+    // Helper: get a Set of all schedule numbers for quick membership checks
+    getScheduleNumberSet() {
+        const set = new Set();
+        (this.schedules || []).forEach(s => {
+            if (s.application_number) set.add(s.application_number);
+        });
+        return set;
+    }
+
+    // Normalize existing records so both legacy and canonical fields are in sync
+    async normalizeExistingData() {
+        // Normalize schedules
+        for (const sched of this.schedules) {
+            const desired = sched.application_number || sched.schedule_number || '';
+            if (!desired) continue;
+            const needsUpdate = (sched.application_number !== desired) || ('schedule_number' in sched);
+            if (needsUpdate) {
+                sched.application_number = desired;
+                if ('schedule_number' in sched) delete sched.schedule_number;
+                try { await this.saveSchedule(sched, true); } catch (e) { ErrorHandler.log(e, 'Normalize schedule'); }
+            }
+        }
+
+        // Normalize series items
+        for (const si of this.seriesItems) {
+            const schedNum = si.application_number || si.schedule_number || '';
+            const seriesNum = si.item_number || si.series_number || '';
+            const needsUpdate = (si.application_number !== schedNum) || ('schedule_number' in si) || (si.item_number !== seriesNum) || ('series_number' in si);
+            if (needsUpdate) {
+                if (schedNum) { si.application_number = schedNum; }
+                if (seriesNum) { si.item_number = seriesNum; }
+                if ('schedule_number' in si) delete si.schedule_number;
+                if ('series_number' in si) delete si.series_number;
+                try { await this.saveSeriesItem(si, true); } catch (e) { ErrorHandler.log(e, 'Normalize series'); }
+            }
         }
     }
 
@@ -999,7 +1270,7 @@ class ILETSBApp {
         row.dataset.itemId = item._id;
         row.tabIndex = 0;
 
-        // Column 1: App #
+        // Column 1: Schedule #
         const colApp = document.createElement('div');
         colApp.className = 'col-app-num';
         DOMHelper.setTextContent(colApp, item.application_number || 'N/A');
@@ -1054,7 +1325,7 @@ class ILETSBApp {
         const recordCountElement = document.getElementById('recordCount');
         if (recordCountElement) {
             // Count unique schedule numbers (check both old and new field names for compatibility)
-            const uniqueScheduleNumbers = [...new Set(this.seriesItems.map(s => s.schedule_number || s.application_number).filter(n => n))];
+            const uniqueScheduleNumbers = [...new Set(this.seriesItems.map(s => s.application_number).filter(n => n))];
             const scheduleCount = uniqueScheduleNumbers.length;
             const seriesCount = this.seriesItems.length;
             recordCountElement.textContent = 
@@ -1087,24 +1358,46 @@ class ILETSBApp {
         }
         
         // Show schedule section if schedule data provided
-        if (schedule && Object.keys(schedule).length > 0 && scheduleSection) {
-            scheduleSection.classList.remove('hidden');
-            this.populateScheduleForm(schedule);
-        } else if (scheduleSection) {
-            scheduleSection.classList.add('hidden');
+        if (scheduleSection) {
+            if (schedule !== null) {
+                // Show the section even for new/empty objects
+                scheduleSection.classList.remove('hidden');
+                // Populate only when data exists
+                if (schedule && Object.keys(schedule).length > 0) {
+                    this.populateScheduleForm(schedule);
+                } else {
+                    const scheduleForm = document.getElementById('scheduleForm');
+                    if (scheduleForm) scheduleForm.reset();
+                }
+            } else {
+                scheduleSection.classList.add('hidden');
+            }
         }
         
-        // Show series section if series data provided
-        if (seriesItem && Object.keys(seriesItem).length > 0 && seriesSection) {
-            seriesSection.classList.remove('hidden');
-            this.populateSeriesForm(seriesItem);
-        } else if (seriesSection) {
-            seriesSection.classList.add('hidden');
+        // Show series section if series argument provided (even if empty object for new)
+        if (seriesSection) {
+            if (seriesItem !== null) {
+                seriesSection.classList.remove('hidden');
+                if (seriesItem && Object.keys(seriesItem).length > 0) {
+                    // Ensure the dropdown has options before setting its value
+                    this.populateSeriesScheduleDropdown();
+                    this.populateSeriesForm(seriesItem);
+                } else {
+                    const seriesForm = document.getElementById('seriesForm');
+                    if (seriesForm) seriesForm.reset();
+                    // Refresh dropdown for new/empty form
+                    this.populateSeriesScheduleDropdown();
+                }
+            } else {
+                seriesSection.classList.add('hidden');
+            }
         }
         
-        // Show divider only if both sections are visible
+        // Show divider only if both sections are visible (regardless of whether they have data)
         if (divider) {
-            if (schedule && Object.keys(schedule).length > 0 && seriesItem && Object.keys(seriesItem).length > 0) {
+            const scheduleVisible = schedule !== null;
+            const seriesVisible = seriesItem !== null;
+            if (scheduleVisible && seriesVisible) {
                 divider.classList.remove('hidden');
             } else {
                 divider.classList.add('hidden');
@@ -1151,7 +1444,10 @@ class ILETSBApp {
         
         // Find the related schedule for this series item
         let relatedSchedule = null;
-        if (item.application_number) {
+        if (item.schedule_id) {
+            relatedSchedule = this.schedules.find(s => s._id === item.schedule_id);
+        } else if (item.application_number) {
+            // Fallback for legacy data
             relatedSchedule = this.schedules.find(s => s.application_number === item.application_number);
         }
         
@@ -1163,6 +1459,9 @@ class ILETSBApp {
     }
 
     populateSeriesForm(item) {
+        // Ensure schedule dropdown options exist, then set value below
+        this.populateSeriesScheduleDropdown();
+
         const fields = {
             'seriesAppNum': item.application_number || '',
             'itemNumber': item.item_number || '',
@@ -1252,6 +1551,8 @@ class ILETSBApp {
         
         if (deleteSeriesBtn) deleteSeriesBtn.classList.add('hidden');
         if (retentionTermGroup) retentionTermGroup.style.display = 'block';
+        // Populate the schedule dropdown and focus it
+        this.populateSeriesScheduleDropdown();
         if (seriesAppNumInput) seriesAppNumInput.focus();
     }
 
@@ -1262,7 +1563,7 @@ class ILETSBApp {
             application_number: document.getElementById('scheduleAppNum').value,
             application_title: document.getElementById('scheduleTitle').value,
             approving_body: document.getElementById('approvingBody').value,
-            approval_status: document.getElementById('approvalStatus').value,
+            approval_status: document.getElementById('approvalStatus').value.toLowerCase(),
             approval_date: document.getElementById('approvalDate').value,
             retention_statement_global: document.getElementById('retentionGlobal').value,
             notes: document.getElementById('scheduleNotes').value,
@@ -1307,7 +1608,7 @@ class ILETSBApp {
         
         if (!seriesAppNumEl) {
             console.error('seriesAppNum element not found');
-            this.setStatus('Form error: Application Number field not found', 'error');
+            this.setStatus('Form error: Schedule Number field not found', 'error');
             return;
         }
         
@@ -1324,7 +1625,14 @@ class ILETSBApp {
         }
         
         if (!seriesAppNumEl.value.trim()) {
-            this.setStatus('Application Number is required', 'error');
+            this.setStatus('Schedule Number is required', 'error');
+            return;
+        }
+        // Relationship validation: ensure selected schedule exists
+        const selectedScheduleNum = seriesAppNumEl.value.trim();
+        const scheduleExists = (this.schedules || []).some(s => s.application_number === selectedScheduleNum);
+        if (!scheduleExists) {
+            this.setStatus('Selected Schedule Number does not exist. Please choose a valid schedule.', 'error');
             return;
         }
         
@@ -1338,8 +1646,17 @@ class ILETSBApp {
             return;
         }
 
+        // Find the schedule_id for the selected schedule
+        // selectedScheduleNum already defined above from the dropdown
+        const relatedSchedule = (this.schedules || []).find(s => s.application_number === selectedScheduleNum);
+        if (!relatedSchedule) {
+            this.setStatus('Selected schedule not found', 'error');
+            return;
+        }
+
         const item = {
-            application_number: document.getElementById('seriesAppNum').value,
+            application_number: selectedScheduleNum,
+            schedule_id: relatedSchedule._id,
             item_number: document.getElementById('itemNumber').value,
             record_series_title: document.getElementById('seriesTitle').value,
             description: document.getElementById('seriesDescription').value,
@@ -1381,9 +1698,9 @@ class ILETSBApp {
         }
 
         try {
-            // Check for duplicate item numbers
+            // Check for duplicate item numbers within the same schedule
             const duplicate = await this.checkDuplicateItemNumber(
-                item.application_number, 
+                item.schedule_id, 
                 item.item_number, 
                 this.currentSeriesItem?._id
             );
@@ -1659,6 +1976,22 @@ class ILETSBApp {
                     item.item_number === itemNumber
                 );
                 resolve(found);
+            };
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async checkDuplicateItemNumber(scheduleId, itemNumber, excludeId = null) {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['series_items'], 'readonly');
+            const store = transaction.objectStore('series_items');
+            const index = store.index('schedule_item');
+            const request = index.get([scheduleId, itemNumber]);
+            
+            request.onsuccess = () => {
+                const duplicate = request.result;
+                // Only consider it a duplicate if it's not the same record we're editing
+                resolve(duplicate && duplicate._id !== excludeId ? duplicate : null);
             };
             request.onerror = () => reject(request.error);
         });
@@ -2101,7 +2434,7 @@ class ILETSBApp {
     createColumnMappingControls(headers) {
         const seriesFields = [
             { key: '', label: '-- Skip Column --' },
-            { key: 'application_number', label: 'Application Number *' },
+            { key: 'application_number', label: 'Schedule Number *' },
             { key: 'item_number', label: 'Item Number *' },
             { key: 'record_series_title', label: 'Record Series Title *' },
             { key: 'description', label: 'Description' },
@@ -2261,34 +2594,6 @@ class ILETSBApp {
     }
 
     // Quality Control Features
-    async checkDuplicateItemNumber(applicationNumber, itemNumber, excludeId = null) {
-        return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['series_items'], 'readonly');
-            const store = transaction.objectStore('series_items');
-            const request = store.openCursor();
-            
-            let found = null;
-            
-            request.onsuccess = (event) => {
-                const cursor = event.target.result;
-                if (cursor) {
-                    const item = cursor.value;
-                    if (item.application_number === applicationNumber && 
-                        item.item_number === itemNumber &&
-                        cursor.key !== excludeId) {
-                        found = { ...item, _id: cursor.key };
-                        resolve(found);
-                        return;
-                    }
-                    cursor.continue();
-                } else {
-                    resolve(null);
-                }
-            };
-            
-            request.onerror = () => reject(request.error);
-        });
-    }
 
     flagRetentionKeywords(retentionText) {
         if (!retentionText) return [];
@@ -2613,7 +2918,7 @@ class ILETSBApp {
                 <table>
                     <thead>
                         <tr>
-                            <th>App #</th>
+                            <th>Schedule #</th>
                             <th>Item #</th>
                             <th>Record Series Title</th>
                             <th>Approval Status</th>
@@ -2638,35 +2943,74 @@ class ILETSBApp {
         `;
     }
 
-    // Delete Confirmations
-    confirmDeleteSchedule() {
-        this.showModal('Delete Schedule', 'Are you sure you want to delete this schedule? This action cannot be undone.', () => {
-            this.deleteCurrentSchedule();
-        });
-    }
-
-    confirmDeleteSeriesItem() {
-        this.showModal('Delete Series Item', 'Are you sure you want to delete this series item? This action cannot be undone.', () => {
-            this.deleteCurrentSeriesItem();
-        });
-    }
-
-    async deleteCurrentSchedule() {
+    async confirmDeleteSchedule() {
         if (!this.currentSchedule) return;
         
-        try {
-            await this.deleteSchedule(this.currentSchedule._id);
-            this.setStatus('Schedule deleted successfully', 'success');
-            await this.updateUI();
-            this.cancelScheduleEdit();
-        } catch (error) {
-            ErrorHandler.log(error, 'Delete schedule', APP_CONSTANTS.ERROR_TYPES.DATABASE);
-            this.setStatus('Error deleting schedule: ' + error.message, 'error');
+        // Check if schedule has series items
+        const relatedSeries = this.seriesItems.filter(item => 
+            item.schedule_id === this.currentSchedule._id || 
+            item.application_number === this.currentSchedule.application_number
+        );
+        
+        if (relatedSeries.length > 0) {
+            if (this.currentSchedule.approval_status === APP_CONSTANTS.APPROVAL_STATUS.DRAFT) {
+                // For drafts, allow cascade delete
+                const confirmed = await this.showConfirmModal(
+                    'Delete Draft Schedule',
+                    `This draft schedule "${this.currentSchedule.application_number}" has ${relatedSeries.length} series item(s). Deleting the schedule will also delete all its series items. This action cannot be undone.`
+                );
+                
+                if (!confirmed) return;
+                
+                try {
+                    // Delete all related series items first
+                    for (const item of relatedSeries) {
+                        await this.deleteSeriesItem(item._id);
+                    }
+                    
+                    await this.deleteSchedule(this.currentSchedule._id);
+                    this.setStatus('Draft schedule and related series items deleted successfully', 'success');
+                    await this.updateUI();
+                    this.cancelScheduleEdit();
+                } catch (error) {
+                    ErrorHandler.log(error, 'Delete draft schedule', APP_CONSTANTS.ERROR_TYPES.DATABASE);
+                    this.setStatus('Error deleting draft schedule: ' + error.message, 'error');
+                }
+            } else {
+                // For approved schedules, block deletion
+                this.setStatus(`Cannot delete approved schedule "${this.currentSchedule.application_number}" because it has ${relatedSeries.length} series item(s). Delete the series items first.`, 'error');
+                return;
+            }
+        } else {
+            // No related series, safe to delete
+            const confirmed = await this.showConfirmModal(
+                'Delete Schedule',
+                `Are you sure you want to delete schedule "${this.currentSchedule.application_number}"? This action cannot be undone.`
+            );
+            
+            if (!confirmed) return;
+            
+            try {
+                await this.deleteSchedule(this.currentSchedule._id);
+                this.setStatus('Schedule deleted successfully', 'success');
+                await this.updateUI();
+                this.cancelScheduleEdit();
+            } catch (error) {
+                ErrorHandler.log(error, 'Delete schedule', APP_CONSTANTS.ERROR_TYPES.DATABASE);
+                this.setStatus('Error deleting schedule: ' + error.message, 'error');
+            }
         }
     }
 
-    async deleteCurrentSeriesItem() {
+    async confirmDeleteSeriesItem() {
         if (!this.currentSeriesItem) return;
+        
+        const confirmed = await this.showConfirmModal(
+            'Delete Series Item',
+            `Are you sure you want to delete series item "${this.currentSeriesItem.item_number}: ${this.currentSeriesItem.record_series_title}"? This action cannot be undone.`
+        );
+        
+        if (!confirmed) return;
         
         try {
             await this.deleteSeriesItem(this.currentSeriesItem._id);
@@ -2753,23 +3097,37 @@ class ILETSBApp {
             toggleBtn.setAttribute('aria-expanded', 'false');
         }
         
-        // Store preference in localStorage
-        localStorage.setItem('iletsb_search_pane_collapsed', !isCollapsed);
+        // Store preference in localStorage (guarded)
+        try {
+            localStorage.setItem('iletsb_search_pane_collapsed', String(!isCollapsed));
+        } catch (e) {
+            // Ignore storage errors; toggling should still work without persistence
+        }
     }
 
     restoreSearchPaneState() {
-        const isCollapsed = localStorage.getItem('iletsb_search_pane_collapsed') === 'true';
+        let isCollapsed = false;
+        try {
+            isCollapsed = localStorage.getItem('iletsb_search_pane_collapsed') === 'true';
+        } catch (e) {
+            // If storage is unavailable, default to expanded
+            isCollapsed = false;
+        }
+        
+        const searchPane = document.getElementById('searchPane');
+        const mainContent = document.querySelector('.main-content');
+        const toggleBtn = document.getElementById('searchToggleBtn');
+        
+        if (!searchPane || !mainContent || !toggleBtn) return;
         
         if (isCollapsed) {
-            const searchPane = document.getElementById('searchPane');
-            const mainContent = document.querySelector('.main-content');
-            const toggleBtn = document.getElementById('searchToggleBtn');
-            
-            if (searchPane && mainContent && toggleBtn) {
-                searchPane.classList.add('collapsed');
-                mainContent.classList.add('search-collapsed');
-                toggleBtn.setAttribute('aria-expanded', 'false');
-            }
+            searchPane.classList.add('collapsed');
+            mainContent.classList.add('search-collapsed');
+            toggleBtn.setAttribute('aria-expanded', 'false');
+        } else {
+            searchPane.classList.remove('collapsed');
+            mainContent.classList.remove('search-collapsed');
+            toggleBtn.setAttribute('aria-expanded', 'true');
         }
     }
 
