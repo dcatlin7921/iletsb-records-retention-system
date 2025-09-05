@@ -70,8 +70,4 @@ The application is designed to work in all modern browsers that support:
 
 ## License
 
-[Specify License Here]
-
-## Contact
-
-[Your Contact Information]
+Proprietary - Illinois Law Enforcement Training and Standards Board
