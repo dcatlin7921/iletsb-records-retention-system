@@ -1,71 +1,77 @@
-# ILETSB Records Retention Inventory
+# ILETSB Records Retention System
 
-![Records Retention System](https://via.placeholder.com/1200x300?text=ILETSB+Records+Retention+System)
+A modern, offline-first web application for managing records retention schedules and series for the Illinois Law Enforcement Training and Standards Board.
 
-[![HTML5](https://img.shields.io/badge/HTML5-E34F26?style=flat-square&logo=html5&logoColor=white)](https://developer.mozilla.org/en-US/docs/Web/Guide/HTML/HTML5)
-[![CSS3](https://img.shields.io/badge/CSS3-1572B6?style=flat-square&logo=css3&logoColor=white)](https://developer.mozilla.org/en-US/docs/Web/CSS)
-[![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=flat-square&logo=javascript&logoColor=black)](https://developer.mozilla.org/en-US/docs/Web/JavaScript)
-[![IndexedDB](https://img.shields.io/badge/IndexedDB-4B32C3?style=flat-square&logo=datacamp&logoColor=white)](https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API)
+## Features
 
-A powerful offline web application for managing records retention schedules and series for the Illinois Law Enforcement Training and Standards Board (ILETSB).
+- **Unified Series Management**: Single table design for all record series with optional schedule assignment
+- **Offline-First**: Works completely offline using IndexedDB for data storage
+- **Powerful Search & Filter**: Advanced search across all fields with comprehensive filtering capabilities
+- **Data Import/Export**: Easy import/export of records in JSON format
+- **Audit Trail**: Complete history of all changes with timestamps and user attribution
 
-## Overview
+## Data Model
 
-This app is designed to help ILETSB manage their records inventory with detailed schedules and series items. It's built as a **static HTML/JS/CSS app** that works entirely offline using **IndexedDB** for data storage, ensuring security and accessibility without network dependency.
+The system uses a simplified data model where all records are stored in a single `series` table with the following key features:
 
-### Key Features
+- **Unique Identification**: Each record is uniquely identified by `[schedule_number + item_number]` when both are present
+- **Flexible Date Handling**: Supports various date formats (YYYY, YYYY-MM, YYYY-MM-DD) with open-ended date ranges
+- **Comprehensive Metadata**: Includes fields for retention information, approval status, media types, and more
+- **Tagging System**: Flexible tagging for categorization and organization
 
-- **Three-Pane Interface**: Intuitive layout for schedules, series, and details.
-- **Advanced Filtering**: Search and filter by tags, retention policies, or date ranges.
-- **Data Management**: Import/export JSON data and track changes with an audit log.
-- **Offline First**: Fully functional without internet; data persists in the browser.
-- **Modern UI**: Clean, accessible design with light/dark mode support and ARIA attributes.
-- **Performance**: Optimized with debounced search inputs and virtual scrolling for thousands of records.
+## Getting Started
 
-## Technical Highlights
-
-- **IndexedDB with Dexie.js**: Efficient local storage with proper indexing for fast queries.
-- **Data Integrity**: Enforces relational constraints (schedule-to-series) and field validation per spec.
-- **Retention Model**: Structured retention objects (trigger, stages, disposition) alongside human-readable text.
-- **Schedule-First Design**: All data is organized around schedule numbers with proper foreign key relationships.
-
-## Installation
-
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/dcatlin7921/iletsb-records-retention-system.git
-   ```
-2. Navigate to the project directory:
-   ```bash
-   cd iletsb-records-retention-system
-   ```
-3. Open `index.html` in a modern browser to run the app locally.
+1. Clone this repository
+2. Open `index.html` in a modern web browser
+3. The application will automatically initialize the database
 
 ## Usage
 
-- Use the **Admin menu** to import existing data or create new schedules and series items.
-- Filter by schedule number, division, or other criteria in the left pane.
-- View series items in the middle pane and edit details on the right.
-- Export your data at any time to preserve changes.
+### Adding Records
+1. Click "Add New Series" 
+2. Fill in the required fields (Record Series Title is mandatory)
+3. Optionally assign to a schedule and add additional metadata
+4. Save your changes
 
-## Contributing
+### Searching and Filtering
+- Use the search bar to find records by any text
+- Apply filters to narrow down by schedule, date range, approval status, etc.
+- Sort results by any column
 
-Contributions are welcome! If you'd like to contribute to this project, please follow these steps:
+### Import/Export
+- Export your entire database for backup or migration
+- Import data from previously exported files
+- The system handles merging of existing records based on natural keys
 
-1. Fork the repository.
-2. Create a new branch (`git checkout -b feature/YourFeature`).
-3. Make your changes and commit them (`git commit -m 'Add some feature'`).
-4. Push to the branch (`git push origin feature/YourFeature`).
-5. Open a pull request.
+## Data Structure
 
-Please ensure your code adheres to the existing style and includes appropriate comments.
+### Series Fields
+- `_id`: Internal auto-incrementing ID
+- `record_series_title` (required)
+- `schedule_number`: Format: ##-### (e.g., 25-012)
+- `item_number`: Format: Number with optional letter or decimal (e.g., 1, 2A, 3.1)
+- `dates_covered_start`: Optional start date
+- `dates_covered_end`: End date or "present"
+- `approval_status`: One of: draft, pending, approved, superseded
+- `retention_text`: Free-form retention description
+- `media_types[]`: Array of media types
+- `tags[]`: Array of tags
+- `division`: Owning division/department
+- `created_at`, `updated_at`: Timestamps
+- `description`: Detailed description of the series
+- `ui_extras`: Additional UI-specific data
 
-## Feedback
+## Browser Support
 
-I built this to solve a real-world problem of managing complex records retention data in a secure, offline environment. I'm particularly proud of the data model adherence and the smooth UX despite the offline constraint.
-
-I'd love feedback on the code, architecture, or potential improvements. If you're interested in offline web apps or records management solutions, let's discuss! Open an issue or reach out directly.
+The application is designed to work in all modern browsers that support:
+- IndexedDB
+- ES6+ JavaScript
+- CSS Grid/Flexbox
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+[Specify License Here]
+
+## Contact
+
+[Your Contact Information]

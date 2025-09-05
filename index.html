@@ -12,7 +12,7 @@
         <header class="top-nav">
             <div class="nav-left">
                 <h1>ILETSB Records Retention Inventory</h1>
-                <span class="version">v1.0</span>
+                <span class="version">v3.7</span>
             </div>
             <div class="nav-right">
                 <div class="admin-menu" id="adminMenu">
@@ -25,9 +25,7 @@
                         <hr class="dropdown-sep" aria-hidden="true">
                         <button class="dropdown-item" id="exportBtn" role="menuitem">Export JSON</button>
                         <button class="dropdown-item" id="importBtn" role="menuitem">Import JSON</button>
-                        <button class="dropdown-item" id="importCsvBtn" role="menuitem">Import CSV</button>
                         <hr class="dropdown-sep" aria-hidden="true">
-                        <button class="dropdown-item" id="printReportBtn" role="menuitem">Print Report</button>
                         <button class="dropdown-item" id="exportFilteredBtn" role="menuitem">Export Filtered</button>
                         <hr class="dropdown-sep" aria-hidden="true">
                         <button class="dropdown-item danger" id="clearDbBtn" role="menuitem" aria-describedby="clearDbDesc">Clear DB</button>
@@ -35,7 +33,6 @@
                     </div>
                 </div>
                 <input type="file" id="importFile" accept=".json" style="display: none;">
-                <input type="file" id="importCsvFile" accept=".csv" style="display: none;">
             </div>
         </header>
 
@@ -196,17 +193,9 @@
                     <!-- Series Tab Panel -->
                     <div id="seriesTabPanel" class="tab-panel hidden" role="tabpanel" aria-labelledby="seriesTab">
                         <form class="detail-form" id="seriesForm">
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label for="seriesScheduleNum" class="form-label">Schedule Number</label>
-                                    <select id="seriesScheduleNum" class="form-control" required aria-label="Select Schedule Number">
-                                        <option value="">Select a schedule…</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label for="itemNumber" class="form-label">Series Number</label>
-                                    <input type="text" id="itemNumber" class="form-control" placeholder="e.g., 100.01" required>
-                                </div>
+                            <div class="form-group">
+                                <label for="itemNumber" class="form-label">Series Number</label>
+                                <input type="text" id="itemNumber" class="form-control" placeholder="e.g., 100.01" required>
                             </div>
 
                             <div class="form-group">
@@ -498,26 +487,6 @@
         </div>
     </div>
 
-    <!-- CSV Import Modal -->
-    <div class="modal hidden" id="csvImportModal" role="dialog" aria-modal="true" aria-labelledby="csvImportTitle">
-        <div class="modal-content csv-modal">
-            <h3 id="csvImportTitle">CSV Import - Column Mapping</h3>
-            <p>Map CSV columns to database fields:</p>
-            
-            <div class="csv-preview" id="csvPreview" role="region" aria-label="CSV data preview">
-                <!-- CSV preview will be populated here -->
-            </div>
-            
-            <div class="column-mapping" id="columnMapping" role="region" aria-label="Column mapping controls">
-                <!-- Column mapping controls will be populated here -->
-            </div>
-            
-            <div class="modal-actions">
-                <button class="btn btn--primary" id="csvImportConfirmBtn">Import Data</button>
-                <button class="btn btn--outline" id="csvImportCancelBtn">Cancel</button>
-            </div>
-        </div>
-    </div>
 
     <script src="app.js"></script>
 </body>

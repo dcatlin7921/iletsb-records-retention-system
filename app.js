@@ -135,7 +135,7 @@ class ILETSBApp {
     constructor() {
         this.db = null;
         this.dbName = APP_CONSTANTS.DB_NAME;
-        this.dbVersion = 3; // Increment for merged model
+        this.dbVersion = 4; // v4: rename application_number to schedule_number
         this.currentSchedule = null;
         this.currentSeriesItem = null;
         this.searchTimeout = null;
@@ -150,7 +150,6 @@ class ILETSBApp {
     async init() {
         try {
             await this.initDatabase();
-            await this.loadSampleData();
             this.initEventListeners();
             this.restoreSearchPaneState();
             this.updateUI();
@@ -175,6 +174,7 @@ class ILETSBApp {
             request.onupgradeneeded = (event) => {
                 const db = event.target.result;
                 const oldVersion = event.oldVersion;
+                const transaction = event.target.transaction;
 
                 // Migration to merged series model (v3)
                 if (oldVersion < 3) {
@@ -189,15 +189,75 @@ class ILETSBApp {
                     }
                 }
 
-                // Create new merged series object store
-                if (!db.objectStoreNames.contains('series')) {
+                // v4: Update series store with new field names and indexes
+                if (oldVersion < 4) {
+                    // If series store exists, we need to migrate data
+                    if (db.objectStoreNames.contains('series')) {
+                        // Store existing data for migration
+                        const oldStore = transaction.objectStore('series');
+                        const migrationData = [];
+                        
+                        // Collect existing data
+                        const getAllRequest = oldStore.getAll();
+                        getAllRequest.onsuccess = () => {
+                            const existingData = getAllRequest.result || [];
+                            
+                            // Delete old store
+                            db.deleteObjectStore('series');
+                            
+                            // Create new store with updated schema
+                            const seriesStore = db.createObjectStore('series', { keyPath: '_id', autoIncrement: true });
+                            seriesStore.createIndex('schedule_number_item_number', ['schedule_number', 'item_number'], { unique: false });
+                            seriesStore.createIndex('record_series_title', 'record_series_title', { unique: false });
+                            seriesStore.createIndex('division', 'division', { unique: false });
+                            seriesStore.createIndex('schedule_number', 'schedule_number', { unique: false });
+                            seriesStore.createIndex('dates_covered_start', 'dates_covered_start', { unique: false });
+                            seriesStore.createIndex('tags', 'tags', { unique: false, multiEntry: true });
+                            
+                            // Migrate existing data
+                            existingData.forEach(item => {
+                                // Rename application_number to schedule_number
+                                if (item.application_number && !item.schedule_number) {
+                                    item.schedule_number = item.application_number;
+                                }
+                                delete item.application_number;
+                                
+                                // Ensure arrays are arrays
+                                const toArr = v => Array.isArray(v) ? v :
+                                    (typeof v === 'string' ? v.split(/[,;\n]/).map(x=>x.trim()).filter(Boolean) : []);
+                                item.tags = toArr(item.tags);
+                                item.media_types = toArr(item.media_types);
+                                item.omb_or_statute_refs = toArr(item.omb_or_statute_refs);
+                                item.related_series = toArr(item.related_series);
+                                
+                                // Ensure ui_extras exists
+                                item.ui_extras = item.ui_extras || {};
+                                
+                                // Remove old fields that are no longer needed
+                                delete item.retention_is_permanent;
+                                delete item.schedule_id;
+                                
+                                seriesStore.add(item);
+                            });
+                        };
+                    } else {
+                        // Create new series store
+                        const seriesStore = db.createObjectStore('series', { keyPath: '_id', autoIncrement: true });
+                        seriesStore.createIndex('schedule_number_item_number', ['schedule_number', 'item_number'], { unique: false });
+                        seriesStore.createIndex('record_series_title', 'record_series_title', { unique: false });
+                        seriesStore.createIndex('division', 'division', { unique: false });
+                        seriesStore.createIndex('schedule_number', 'schedule_number', { unique: false });
+                        seriesStore.createIndex('dates_covered_start', 'dates_covered_start', { unique: false });
+                        seriesStore.createIndex('tags', 'tags', { unique: false, multiEntry: true });
+                    }
+                } else if (!db.objectStoreNames.contains('series')) {
+                    // Create new merged series object store for fresh installs
                     const seriesStore = db.createObjectStore('series', { keyPath: '_id', autoIncrement: true });
-                    seriesStore.createIndex('application_number_item_number', ['application_number', 'item_number'], { unique: false });
+                    seriesStore.createIndex('schedule_number_item_number', ['schedule_number', 'item_number'], { unique: false });
                     seriesStore.createIndex('record_series_title', 'record_series_title', { unique: false });
                     seriesStore.createIndex('division', 'division', { unique: false });
-                    seriesStore.createIndex('retention_is_permanent', 'retention_is_permanent', { unique: false });
+                    seriesStore.createIndex('schedule_number', 'schedule_number', { unique: false });
                     seriesStore.createIndex('dates_covered_start', 'dates_covered_start', { unique: false });
-                    seriesStore.createIndex('application_number', 'application_number', { unique: false });
                     seriesStore.createIndex('tags', 'tags', { unique: false, multiEntry: true });
                 }
 
@@ -240,11 +300,6 @@ class ILETSBApp {
         });
     }
 
-    async loadSampleData() {
-        // Sample data loading has been disabled to prevent automatic data population
-        // If you need sample data, use the import functionality instead
-        return;
-    }
 
     
 
@@ -255,13 +310,12 @@ class ILETSBApp {
         const scheduleMap = new Map();
         
         series.forEach(item => {
-            if (item.application_number) {
-                const key = item.application_number;
+            if (item.schedule_number) {
+                const key = item.schedule_number;
                 if (!scheduleMap.has(key)) {
                     scheduleMap.set(key, {
                         _id: `sched_${key}`,
-                        schedule_number: item.application_number,
-                        application_number: item.application_number,
+                        schedule_number: item.schedule_number,
                         approval_status: item.approval_status,
                         approval_date: item.approval_date,
                         division: item.division,
@@ -282,23 +336,35 @@ class ILETSBApp {
 
     async getAllSeries() {
         return new Promise((resolve, reject) => {
+            if (!this.db) {
+                console.error('Database not initialized');
+                resolve([]);
+                return;
+            }
+            
             const transaction = this.db.transaction(['series'], 'readonly');
             const store = transaction.objectStore('series');
             const request = store.getAll();
             
-            request.onsuccess = () => resolve(request.result || []);
-            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+                const result = request.result || [];
+                resolve(result);
+            };
+            request.onerror = () => {
+                console.error('getAllSeries error:', request.error);
+                reject(request.error);
+            };
         });
     }
 
     async saveSchedule(schedule, isUpdate = false) {
-        // Legacy method - now updates all series with matching application_number
+        // Legacy method - now updates all series with matching schedule_number
         const series = await this.getAllSeries();
-        const matchingSeries = series.filter(s => s.application_number === schedule.schedule_number);
+        const matchingSeries = series.filter(s => s.schedule_number === schedule.schedule_number);
         
         const promises = matchingSeries.map(seriesItem => {
             // Update schedule fields on the series item
-            seriesItem.application_number = schedule.schedule_number;
+            seriesItem.schedule_number = schedule.schedule_number;
             seriesItem.approval_status = schedule.approval_status;
             seriesItem.approval_date = schedule.approval_date;
             seriesItem.division = schedule.division || seriesItem.division;
@@ -333,11 +399,18 @@ class ILETSBApp {
             request.onsuccess = () => {
                 const id = request.result;
                 item._id = id;
-                this.logAuditEvent('series', id, isUpdate ? 'update' : 'create', { 
-                    application_number: item.application_number,
-                    item_number: item.item_number,
-                    record_series_title: item.record_series_title
-                });
+                
+                // Log audit event separately to avoid blocking the main operation
+                setTimeout(() => {
+                    this.logAuditEvent('series', id, isUpdate ? 'update' : 'create', { 
+                        schedule_number: item.schedule_number,
+                        item_number: item.item_number,
+                        record_series_title: item.record_series_title
+                    }).catch(err => {
+                        ErrorHandler.log(err, 'Audit event logging');
+                    });
+                }, 0);
+                
                 resolve(item);
             };
             request.onerror = () => reject(request.error);
@@ -348,11 +421,11 @@ class ILETSBApp {
         // Legacy method - now removes schedule assignment from all matching series
         const series = await this.getAllSeries();
         const scheduleNumber = id.replace('sched_', '');
-        const matchingSeries = series.filter(s => s.application_number === scheduleNumber);
+        const matchingSeries = series.filter(s => s.schedule_number === scheduleNumber);
         
         const promises = matchingSeries.map(seriesItem => {
             // Remove schedule assignment fields
-            delete seriesItem.application_number;
+            delete seriesItem.schedule_number;
             delete seriesItem.approval_status;
             delete seriesItem.approval_date;
             
@@ -402,42 +475,188 @@ class ILETSBApp {
         });
     }
 
-    // Search and Filtering
-    async searchSeriesItems(filters = {}) {
+    // Modern Search and Filtering System
+    async searchAndFilterSeries(searchCriteria = {}) {
         return new Promise((resolve, reject) => {
             const transaction = this.db.transaction(['series'], 'readonly');
             const store = transaction.objectStore('series');
-            const request = store.getAll();
+            
+            // Use appropriate index if available
+            let request;
+            if (searchCriteria.scheduleNumber) {
+                const index = store.index('schedule_number');
+                request = index.getAll(searchCriteria.scheduleNumber);
+            } else if (searchCriteria.division) {
+                const index = store.index('division');
+                request = index.getAll(searchCriteria.division);
+            } else {
+                request = store.getAll();
+            }
             
             request.onsuccess = () => {
                 let items = request.result || [];
                 
-                // Apply filters
-                if (filters.searchText) {
-                    const searchLower = filters.searchText.toLowerCase();
-                    items = items.filter(item => 
-                        (item.record_series_title && item.record_series_title.toLowerCase().includes(searchLower)) ||
-                        (item.description && item.description.toLowerCase().includes(searchLower)) ||
-                        (item.retention_text && item.retention_text.toLowerCase().includes(searchLower))
-                    );
+                // Apply text search across multiple fields
+                if (searchCriteria.searchText) {
+                    const searchTerms = searchCriteria.searchText.toLowerCase().split(/\s+/).filter(term => term.length > 0);
+                    items = items.filter(item => {
+                        const searchableText = this.buildSearchableText(item).toLowerCase();
+                        return searchTerms.every(term => searchableText.includes(term));
+                    });
                 }
                 
-                if (filters.scheduleNumber) {
-                    items = items.filter(item => item.application_number === filters.scheduleNumber);
-                }
+                // Apply specific filters
+                items = items.filter(item => this.matchesFilterCriteria(item, searchCriteria));
                 
-                if (filters.division) {
-                    items = items.filter(item => item.division === filters.division);
-                }
-                
-                if (filters.approvalStatus) {
-                    items = items.filter(item => item.approval_status === filters.approvalStatus);
+                // Apply sorting
+                if (searchCriteria.sortBy) {
+                    items = this.sortSeriesItems(items, searchCriteria.sortBy, searchCriteria.sortOrder);
                 }
                 
                 resolve(items);
             };
             request.onerror = () => reject(request.error);
         });
+    }
+
+    buildSearchableText(item) {
+        const fields = [
+            item.record_series_title,
+            item.schedule_number,
+            item.item_number,
+            item.division,
+            item.retention_text,
+            item.notes,
+            Array.isArray(item.tags) ? item.tags.join(' ') : '',
+            Array.isArray(item.media_types) ? item.media_types.join(' ') : '',
+            Array.isArray(item.omb_or_statute_refs) ? item.omb_or_statute_refs.join(' ') : '',
+            item.ui_extras?.seriesDescription || '',
+            item.ui_extras?.seriesContact || '',
+            item.ui_extras?.arrangement || ''
+        ];
+        return fields.filter(Boolean).join(' ');
+    }
+
+    matchesFilterCriteria(item, criteria) {
+        // Schedule number filter
+        if (criteria.scheduleNumber && item.schedule_number !== criteria.scheduleNumber) {
+            return false;
+        }
+        
+        // Division filter
+        if (criteria.division && item.division !== criteria.division) {
+            return false;
+        }
+        
+        // Approval status filter
+        if (criteria.approvalStatus && item.approval_status !== criteria.approvalStatus) {
+            return false;
+        }
+        
+        // Date range filters
+        if (criteria.approvalDateStart || criteria.approvalDateEnd) {
+            if (!this.isDateInRange(item.approval_date, criteria.approvalDateStart, criteria.approvalDateEnd)) {
+                return false;
+            }
+        }
+        
+        if (criteria.coverageDateStart || criteria.coverageDateEnd) {
+            if (!this.isCoverageDateInRange(item, criteria.coverageDateStart, criteria.coverageDateEnd)) {
+                return false;
+            }
+        }
+        
+        // Tag filter
+        if (criteria.tags && criteria.tags.length > 0) {
+            const itemTags = Array.isArray(item.tags) ? item.tags : [];
+            if (!criteria.tags.some(tag => itemTags.includes(tag))) {
+                return false;
+            }
+        }
+        
+        // Media type filter
+        if (criteria.mediaTypes && criteria.mediaTypes.length > 0) {
+            const itemMediaTypes = Array.isArray(item.media_types) ? item.media_types : [];
+            if (!criteria.mediaTypes.some(type => itemMediaTypes.includes(type))) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+
+    sortSeriesItems(items, sortBy, sortOrder = 'asc') {
+        return items.sort((a, b) => {
+            let aVal = this.getSortValue(a, sortBy);
+            let bVal = this.getSortValue(b, sortBy);
+            
+            // Handle null/undefined values
+            if (aVal == null && bVal == null) return 0;
+            if (aVal == null) return sortOrder === 'asc' ? 1 : -1;
+            if (bVal == null) return sortOrder === 'asc' ? -1 : 1;
+            
+            // Convert to strings for comparison
+            aVal = String(aVal).toLowerCase();
+            bVal = String(bVal).toLowerCase();
+            
+            const comparison = aVal.localeCompare(bVal, undefined, { numeric: true });
+            return sortOrder === 'asc' ? comparison : -comparison;
+        });
+    }
+
+    getSortValue(item, sortBy) {
+        switch (sortBy) {
+            case 'schedule_item':
+                return `${item.schedule_number || 'zzz'}-${item.item_number || 'zzz'}`;
+            case 'dates_covered_start':
+                return this.normalizeDateForSorting(item.dates_covered_start);
+            case 'approval_date':
+                return this.normalizeDateForSorting(item.approval_date);
+            case 'updated_at':
+                return item.updated_at || '';
+            default:
+                return item[sortBy] || '';
+        }
+    }
+
+    normalizeDateForSorting(dateStr) {
+        if (!dateStr) return '0000';
+        if (dateStr.toLowerCase() === 'present') return '9999';
+        
+        // Extract year for sorting
+        const yearMatch = dateStr.match(/(\d{4})/);
+        return yearMatch ? yearMatch[1] : '0000';
+    }
+
+    isDateInRange(dateStr, startDate, endDate) {
+        if (!dateStr) return !startDate && !endDate;
+        
+        const year = this.extractYear(dateStr);
+        if (!year) return false;
+        
+        if (startDate && year < parseInt(startDate)) return false;
+        if (endDate && year > parseInt(endDate)) return false;
+        
+        return true;
+    }
+
+    isCoverageDateInRange(item, startDate, endDate) {
+        const startYear = this.extractYear(item.dates_covered_start);
+        const endYear = this.extractYear(item.dates_covered_end);
+        
+        if (startDate) {
+            const filterStart = parseInt(startDate);
+            if (startYear && startYear > filterStart) return false;
+            if (!startYear && endYear && endYear < filterStart) return false;
+        }
+        
+        if (endDate) {
+            const filterEnd = parseInt(endDate);
+            if (endYear && endYear !== 9999 && endYear < filterEnd) return false;
+            if (!endYear && startYear && startYear > filterEnd) return false;
+        }
+        
+        return true;
     }
 
     // UI Event Handlers
@@ -454,14 +673,6 @@ class ILETSBApp {
             document.getElementById('importFile').click();
         });
         document.getElementById('importFile').addEventListener('change', (e) => this.importData(e));
-        document.getElementById('importCsvBtn').addEventListener('click', (e) => {
-            e.preventDefault();
-            document.getElementById('importCsvFile').click();
-        });
-        document.getElementById('importCsvFile').addEventListener('change', (e) => this.handleCsvFile(e));
-        document.getElementById('csvImportConfirmBtn').addEventListener('click', () => this.processCsvImport());
-        document.getElementById('csvImportCancelBtn').addEventListener('click', () => this.hideCsvModal());
-        document.getElementById('printReportBtn').addEventListener('click', () => this.printReport());
         document.getElementById('exportFilteredBtn').addEventListener('click', () => this.exportFilteredData());
 
         // Search and filters
@@ -485,10 +696,8 @@ class ILETSBApp {
         // Forms
         document.getElementById('scheduleForm').addEventListener('submit', (e) => this.handleScheduleSubmit(e));
         const seriesForm = document.getElementById('seriesForm');
-        console.log('Setting up seriesForm event listener, form found:', !!seriesForm);
         if (seriesForm) {
             seriesForm.addEventListener('submit', (e) => this.handleSeriesSubmit(e));
-            console.log('seriesForm submit event listener attached');
         } else {
             console.error('seriesForm element not found during event listener setup');
         }
@@ -639,46 +848,115 @@ class ILETSBApp {
     }
 
     async applyFilters() {
-        const searchInput = document.getElementById('searchInput');
-        const scheduleFilter = document.getElementById('scheduleFilter');
-        const divisionFilter = document.getElementById('divisionFilter');
-        const statusFilter = document.getElementById('statusFilter');
-
-        // Check if elements exist before accessing values
-        if (!searchInput || !scheduleFilter || !divisionFilter || !statusFilter) {
-            ErrorHandler.log(new Error('Filter elements not found'), 'Apply filters', APP_CONSTANTS.ERROR_TYPES.VALIDATION);
-            return;
-        }
-
-        const filters = {
-            searchText: searchInput.value.trim(),
-            scheduleNumber: scheduleFilter.value,
-            division: divisionFilter.value,
-            approvalStatus: statusFilter.value
-        };
-
         try {
-            this.filteredItems = await this.searchSeriesItems(filters);
-            this.sortResults();
-            this.renderResults();
+            const searchCriteria = this.buildSearchCriteria();
+            this.filteredItems = await this.searchAndFilterSeries(searchCriteria);
+            
+            // Update UI
+            await this.renderResults();
             this.updateResultsSummary();
+            this.updateFilterSummary();
+            
         } catch (error) {
             ErrorHandler.log(error, 'Apply filters');
             this.setStatus('Error applying filters: ' + error.message, 'error');
         }
     }
 
-    sortResults() {
-        const sortByElement = document.getElementById('sortBy');
-        if (!sortByElement) return;
+    buildSearchCriteria() {
+        const criteria = {};
         
-        const sortBy = sortByElement.value;
-        this.filteredItems.sort((a, b) => {
-            const aVal = a[sortBy] || '';
-            const bVal = b[sortBy] || '';
-            return aVal.toString().localeCompare(bVal.toString());
-        });
+        // Text search
+        const searchInput = document.getElementById('searchInput');
+        if (searchInput?.value.trim()) {
+            criteria.searchText = searchInput.value.trim();
+        }
+        
+        // Schedule number filter
+        const scheduleFilter = document.getElementById('scheduleFilter');
+        if (scheduleFilter?.value) {
+            criteria.scheduleNumber = scheduleFilter.value;
+        }
+        
+        // Division filter
+        const divisionFilter = document.getElementById('divisionFilter');
+        if (divisionFilter?.value) {
+            criteria.division = divisionFilter.value;
+        }
+        
+        // Approval status filter
+        const statusFilter = document.getElementById('statusFilter');
+        if (statusFilter?.value) {
+            criteria.approvalStatus = statusFilter.value;
+        }
+        
+        // Date range filters
+        const approvalDateStart = document.getElementById('approvalDateStart');
+        if (approvalDateStart?.value) {
+            criteria.approvalDateStart = approvalDateStart.value;
+        }
+        
+        const approvalDateEnd = document.getElementById('approvalDateEnd');
+        if (approvalDateEnd?.value) {
+            criteria.approvalDateEnd = approvalDateEnd.value;
+        }
+        
+        const coverageDateStart = document.getElementById('coverageDateStart');
+        if (coverageDateStart?.value) {
+            criteria.coverageDateStart = coverageDateStart.value;
+        }
+        
+        const coverageDateEnd = document.getElementById('coverageDateEnd');
+        if (coverageDateEnd?.value) {
+            criteria.coverageDateEnd = coverageDateEnd.value;
+        }
+        
+        // Tag filter (if implemented in UI)
+        const tagFilter = document.getElementById('tagFilter');
+        if (tagFilter?.value) {
+            criteria.tags = tagFilter.value.split(',').map(tag => tag.trim()).filter(Boolean);
+        }
+        
+        // Sorting
+        const sortBy = document.getElementById('sortBy');
+        if (sortBy?.value) {
+            criteria.sortBy = sortBy.value;
+        }
+        
+        const sortOrder = document.getElementById('sortOrder');
+        if (sortOrder?.value) {
+            criteria.sortOrder = sortOrder.value;
+        }
+        
+        return criteria;
     }
+
+    updateFilterSummary() {
+        const summary = document.getElementById('filterSummary');
+        if (!summary) return;
+        
+        const criteria = this.buildSearchCriteria();
+        const activeFilters = [];
+        
+        if (criteria.searchText) activeFilters.push(`Text: "${criteria.searchText}"`);
+        if (criteria.scheduleNumber) activeFilters.push(`Schedule: ${criteria.scheduleNumber}`);
+        if (criteria.division) activeFilters.push(`Division: ${criteria.division}`);
+        if (criteria.approvalStatus) activeFilters.push(`Status: ${criteria.approvalStatus}`);
+        if (criteria.approvalDateStart || criteria.approvalDateEnd) {
+            const dateRange = `${criteria.approvalDateStart || 'start'} - ${criteria.approvalDateEnd || 'end'}`;
+            activeFilters.push(`Approval: ${dateRange}`);
+        }
+        if (criteria.coverageDateStart || criteria.coverageDateEnd) {
+            const dateRange = `${criteria.coverageDateStart || 'start'} - ${criteria.coverageDateEnd || 'end'}`;
+            activeFilters.push(`Coverage: ${dateRange}`);
+        }
+        
+        summary.textContent = activeFilters.length > 0 
+            ? `Active filters: ${activeFilters.join(', ')}`
+            : 'No active filters';
+    }
+
+    // Removed old sortResults method - sorting now handled in searchAndFilterSeries
 
     clearFilters() {
         const elements = [
@@ -705,7 +983,9 @@ class ILETSBApp {
         try {
             // Load data sequentially to avoid race conditions
             this.schedules = await this.getAllSchedules();
+            
             this.seriesItems = await this.getAllSeries(); // Use getAllSeries for merged model
+            
             this.filteredItems = [...this.seriesItems];
             
             // Wait for data to be fully loaded before updating UI
@@ -721,61 +1001,70 @@ class ILETSBApp {
             this.updateResultsSummary();
             this.updateRecordCount();
         } catch (error) {
-            ErrorHandler.log(error, 'UI update');
+            ErrorHandler.log(error, 'Update UI');
+            this.setStatus('Error updating interface: ' + error.message, 'error');
         }
     }
 
-    populateFilterDropdowns() {
-        // Schedule numbers - use application_number from merged model
-        const scheduleNumbers = [...new Set(this.seriesItems.map(s => s.application_number).filter(n => n))];
-        const scheduleSelect = document.getElementById('scheduleFilter');
-        if (scheduleSelect) {
-            DOMHelper.clearElement(scheduleSelect);
-            scheduleSelect.appendChild(DOMHelper.createOption('', 'All Schedules'));
-            scheduleNumbers.forEach(num => {
-                scheduleSelect.appendChild(DOMHelper.createOption(num, num));
-            });
-        }
+    async populateFilterDropdowns() {
+        try {
+            // Get all series data for populating dropdowns
+            const allSeries = await this.getAllSeries();
+            
+            // Schedule numbers
+            const scheduleNumbers = [...new Set(allSeries.map(s => s.schedule_number).filter(n => n))].sort();
+            const scheduleSelect = document.getElementById('scheduleFilter');
+            if (scheduleSelect) {
+                DOMHelper.clearElement(scheduleSelect);
+                scheduleSelect.appendChild(DOMHelper.createOption('', 'All Schedules'));
+                scheduleNumbers.forEach(num => {
+                    scheduleSelect.appendChild(DOMHelper.createOption(num, num));
+                });
+            }
 
-        // Divisions
-        const divisions = [...new Set(this.seriesItems.map(s => s.division).filter(d => d))];
-        const divSelect = document.getElementById('divisionFilter');
-        if (divSelect) {
-            DOMHelper.clearElement(divSelect);
-            divSelect.appendChild(DOMHelper.createOption('', 'All Divisions'));
-            divisions.forEach(div => {
-                divSelect.appendChild(DOMHelper.createOption(div, div));
-            });
+            // Divisions
+            const divisions = [...new Set(allSeries.map(s => s.division).filter(d => d))].sort();
+            const divSelect = document.getElementById('divisionFilter');
+            if (divSelect) {
+                DOMHelper.clearElement(divSelect);
+                divSelect.appendChild(DOMHelper.createOption('', 'All Divisions'));
+                divisions.forEach(div => {
+                    divSelect.appendChild(DOMHelper.createOption(div, div));
+                });
+            }
+            
+            // Approval status
+            const statusSelect = document.getElementById('statusFilter');
+            if (statusSelect) {
+                DOMHelper.clearElement(statusSelect);
+                statusSelect.appendChild(DOMHelper.createOption('', 'All Statuses'));
+                Object.values(APP_CONSTANTS.APPROVAL_STATUS).forEach(status => {
+                    const displayName = status.charAt(0).toUpperCase() + status.slice(1);
+                    statusSelect.appendChild(DOMHelper.createOption(status, displayName));
+                });
+            }
+            
+            // Tags (if tag filter exists)
+            const tagSelect = document.getElementById('tagFilter');
+            if (tagSelect) {
+                const allTags = [...new Set(allSeries.flatMap(s => Array.isArray(s.tags) ? s.tags : []))].sort();
+                DOMHelper.clearElement(tagSelect);
+                tagSelect.appendChild(DOMHelper.createOption('', 'All Tags'));
+                allTags.forEach(tag => {
+                    tagSelect.appendChild(DOMHelper.createOption(tag, tag));
+                });
+            }
+            
+        } catch (error) {
+            ErrorHandler.log(error, 'Populate filter dropdowns');
         }
     }
 
-    // Populate the Series form Schedule Number dropdown with existing schedules
+    // Legacy function - schedule dropdown removed from Series tab
     populateSeriesScheduleDropdown() {
-        const select = document.getElementById('seriesScheduleNum');
-        if (!select) return;
-
-        // Preserve current selection (schedule_id as string)
-        const currentValue = select.value;
-
-        // Build sorted list by schedule_number for display
-        const schedules = (this.schedules || [])
-            .filter(s => s && s._id != null && s.schedule_number)
-            .sort((a, b) => String(a.schedule_number).localeCompare(String(b.schedule_number)));
-
-        DOMHelper.clearElement(select);
-        select.appendChild(DOMHelper.createOption('', 'Select a schedule…'));
-
-        schedules.forEach(s => {
-            // value = internal schedule_id, label = schedule_number
-            const opt = DOMHelper.createOption(String(s._id), s.schedule_number);
-            opt.setAttribute('data-schedule-number', s.schedule_number);
-            select.appendChild(opt);
-        });
-
-        // Try to restore previous selection if still available
-        if (currentValue) {
-            select.value = currentValue;
-        }
+        // Schedule dropdown has been removed from Series Details tab
+        // Schedule information is now managed in the Schedule Details tab
+        return;
     }
 
     // Helper: get a Set of all schedule numbers for quick membership checks
@@ -820,277 +1109,55 @@ class ILETSBApp {
         const resultsList = document.getElementById('resultsList');
         const emptyState = document.getElementById('emptyState');
         
-        if (!resultsList || !emptyState) return;
-        
-        // Initialize virtual scrolling if not already done
-        if (!this.virtualScroller) {
-            this.initVirtualScrolling();
-        }
-        
-        // Get filtered count using IndexedDB cursors
-        const filteredCount = await this.getFilteredItemsCount();
-        
-        if (filteredCount === 0) {
-            DOMHelper.clearElement(resultsList);
-            resultsList.appendChild(emptyState);
-            return;
-        }
-
-        emptyState.style.display = 'none';
-        
-        // Render virtual viewport
-        await this.renderVirtualViewport();
-    }
-
-    initVirtualScrolling() {
-        const resultsList = document.getElementById('resultsList');
         if (!resultsList) return;
-
-        this.virtualScroller = {
-            itemHeight: 60, // Height of each result row in pixels
-            viewportHeight: 0,
-            scrollTop: 0,
-            totalItems: 0,
-            visibleStart: 0,
-            visibleEnd: 0,
-            buffer: 5 // Extra items to render for smooth scrolling
-        };
-
-        // Set up scroll container
-        resultsList.style.position = 'relative';
-        resultsList.style.overflow = 'auto';
-        resultsList.style.height = '100%';
-
-        // Add scroll listener with throttling
-        let scrollTimeout;
-        resultsList.addEventListener('scroll', () => {
-            if (scrollTimeout) clearTimeout(scrollTimeout);
-            scrollTimeout = setTimeout(() => {
-                this.handleVirtualScroll();
-            }, 16); // ~60fps
-        });
-
-        // Calculate viewport height
-        this.virtualScroller.viewportHeight = resultsList.clientHeight;
-    }
-
-    async handleVirtualScroll() {
-        const resultsList = document.getElementById('resultsList');
-        if (!resultsList || !this.virtualScroller) return;
-
-        this.virtualScroller.scrollTop = resultsList.scrollTop;
-        await this.renderVirtualViewport();
-    }
-
-    async renderVirtualViewport() {
-        const resultsList = document.getElementById('resultsList');
-        if (!resultsList || !this.virtualScroller) return;
-
-        const { itemHeight, viewportHeight, scrollTop, buffer } = this.virtualScroller;
         
-        // Calculate visible range
-        const visibleStart = Math.max(0, Math.floor(scrollTop / itemHeight) - buffer);
-        const visibleCount = Math.ceil(viewportHeight / itemHeight) + (buffer * 2);
-        const visibleEnd = Math.min(await this.getFilteredItemsCount(), visibleStart + visibleCount);
-
-        // Only re-render if range changed significantly
-        if (Math.abs(visibleStart - this.virtualScroller.visibleStart) < 2 && 
-            Math.abs(visibleEnd - this.virtualScroller.visibleEnd) < 2) {
+        // Clear previous results but preserve emptyState in its original position
+        const children = Array.from(resultsList.children);
+        children.forEach(child => {
+            if (child.id !== 'emptyState') {
+                resultsList.removeChild(child);
+            }
+        });
+        
+        if (this.filteredItems.length === 0) {
+            // Show empty state
+            if (emptyState) {
+                emptyState.style.display = 'block';
+            }
             return;
         }
 
-        this.virtualScroller.visibleStart = visibleStart;
-        this.virtualScroller.visibleEnd = visibleEnd;
-
-        // Get items for visible range using cursor
-        const visibleItems = await this.getFilteredItemsRange(visibleStart, visibleEnd - visibleStart);
-        
-        // Calculate total height and create spacers
-        const totalItems = await this.getFilteredItemsCount();
-        const totalHeight = totalItems * itemHeight;
-        const offsetY = visibleStart * itemHeight;
-
-        // Clear and rebuild viewport
-        DOMHelper.clearElement(resultsList);
-
-        // Top spacer
-        if (offsetY > 0) {
-            const topSpacer = document.createElement('div');
-            topSpacer.style.height = `${offsetY}px`;
-            topSpacer.className = 'virtual-spacer';
-            resultsList.appendChild(topSpacer);
+        // Hide empty state when we have results
+        if (emptyState) {
+            emptyState.style.display = 'none';
         }
-
-        // Visible items
-        visibleItems.forEach((item, index) => {
-            const row = this.createResultRow(item, visibleStart + index);
+        
+        // Render all filtered items (simplified approach)
+        this.filteredItems.forEach((item, index) => {
+            const row = this.createResultRow(item, index);
             resultsList.appendChild(row);
         });
-
-        // Bottom spacer
-        const bottomSpacerHeight = totalHeight - offsetY - (visibleItems.length * itemHeight);
-        if (bottomSpacerHeight > 0) {
-            const bottomSpacer = document.createElement('div');
-            bottomSpacer.style.height = `${bottomSpacerHeight}px`;
-            bottomSpacer.className = 'virtual-spacer';
-            resultsList.appendChild(bottomSpacer);
+        
+        // Highlight selected item if any
+        if (this.selectedItemId) {
+            const selectedRow = resultsList.querySelector(`[data-item-id="${this.selectedItemId}"]`);
+            if (selectedRow) {
+                selectedRow.classList.add('selected');
+            }
         }
     }
 
-    async getFilteredItemsCount() {
-        return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['series'], 'readonly');
-            const store = transaction.objectStore('series');
-            const request = store.openCursor();
-            
-            let count = 0;
-            
-            request.onsuccess = (event) => {
-                const cursor = event.target.result;
-                if (cursor) {
-                    if (this.matchesCurrentFilters(cursor.value)) {
-                        count++;
-                    }
-                    cursor.continue();
-                } else {
-                    resolve(count);
-                }
-            };
-            
-            request.onerror = () => reject(request.error);
-        });
-    }
+    // Removed virtual scrolling - using simpler direct rendering
 
-    async getFilteredItemsRange(offset, limit) {
-        return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['series'], 'readonly');
-            const store = transaction.objectStore('series');
-            const request = store.openCursor();
-            
-            const items = [];
-            let currentIndex = 0;
-            let foundItems = 0;
-            
-            request.onsuccess = (event) => {
-                const cursor = event.target.result;
-                if (cursor) {
-                    if (currentIndex >= offset && foundItems < limit) {
-                        items.push({ ...cursor.value, _id: cursor.key });
-                        foundItems++;
-                    }
-                    currentIndex++;
-                    
-                    if (foundItems >= limit) {
-                        resolve(items);
-                        return;
-                    }
-                } else {
-                    resolve(items);
-                }
-            };
-            
-            request.onerror = () => reject(request.error);
-        });
-    }
+    // Removed virtual scroll handler
 
-    matchesCurrentFilters(item) {
-        // Apply current search and filter criteria
-        const searchTerm = document.getElementById('searchInput')?.value.toLowerCase() || '';
-        const applicationFilter = document.getElementById('applicationFilter')?.value || '';
-        const divisionFilter = document.getElementById('divisionFilter')?.value || '';
-        const statusFilter = document.getElementById('statusFilter')?.value || '';
-        const approvalDateStart = document.getElementById('approvalDateStart')?.value || '';
-        const approvalDateEnd = document.getElementById('approvalDateEnd')?.value || '';
-        const coverageDateStart = document.getElementById('coverageDateStart')?.value || '';
-        const coverageDateEnd = document.getElementById('coverageDateEnd')?.value || '';
+    // Removed virtual viewport rendering
 
-        // Enhanced search term filter - search across more fields
-        if (searchTerm) {
-            const searchFields = [
-                item.record_series_title,
-                item.description,
-                item.retention_text,
-                // Schedule number displayed via join, not stored on series item
-                item.item_number,
-                item.division,
-                item.contact,
-                item.location,
-                item.arrangement,
-                item.media_types,
-                item.series_notes,
-                item.representative_name,
-                item.records_officer_name
-            ].join(' ').toLowerCase();
-            
-            if (!searchFields.includes(searchTerm)) {
-                return false;
-            }
-        }
+    // Removed old filtered items count method
 
-        // Schedule number filter
-        if (applicationFilter) {
-            const schedule = this.schedules.find(s => s.schedule_number === applicationFilter);
-            if (!schedule || item.schedule_id !== schedule._id) {
-                return false;
-            }
-        }
+    // Removed old filtered items range method
 
-        // Division filter
-        if (divisionFilter && item.division !== divisionFilter) {
-            return false;
-        }
-
-        // Status filter
-        if (statusFilter) {
-            const schedule = this.schedules.find(s => s._id === item.schedule_id);
-            const approvalStatus = schedule ? (schedule.approval_status || 'Unapproved') : 'Unapproved';
-            if (approvalStatus !== statusFilter) return false;
-        }
-
-        // Approval date range filter (uses schedule.approval_date)
-        if (approvalDateStart || approvalDateEnd) {
-            const schedule = this.schedules.find(s => s._id === item.schedule_id);
-            if (!schedule || !schedule.approval_date) {
-                // If date filter is set but no approval date exists, exclude
-                return false;
-            }
-            const approvalYear = this.extractYear(schedule.approval_date);
-            if (approvalDateStart) {
-                const filterStartYear = parseInt(approvalDateStart);
-                if (approvalYear && approvalYear < filterStartYear) {
-                    return false;
-                }
-            }
-            if (approvalDateEnd) {
-                const filterEndYear = parseInt(approvalDateEnd);
-                if (approvalYear && approvalYear > filterEndYear) {
-                    return false;
-                }
-            }
-        }
-
-        // Coverage date range filter
-        if (coverageDateStart || coverageDateEnd) {
-            const startYear = this.extractYear(item.dates_covered_start);
-            const endYear = this.extractYear(item.dates_covered_end);
-            
-            if (coverageDateStart) {
-                const filterStartYear = parseInt(coverageDateStart);
-                if (startYear && startYear < filterStartYear) {
-                    return false;
-                }
-            }
-            
-            if (coverageDateEnd) {
-                const filterEndYear = parseInt(coverageDateEnd);
-                if (endYear && endYear > filterEndYear) {
-                    return false;
-                }
-            }
-        }
-
-        return true;
-    }
+    // Removed old filter matching method - replaced with new system
 
     getRetentionCategory(item) {
         if (item.retention_term && item.retention_term > 0) {
@@ -1118,8 +1185,8 @@ class ILETSBApp {
         // Column 1: Schedule #
         const colApp = document.createElement('div');
         colApp.className = 'col-app-num';
-        // Display application_number directly from merged model
-        DOMHelper.setTextContent(colApp, item.application_number || 'N/A');
+        // Display schedule_number directly from merged model
+        DOMHelper.setTextContent(colApp, item.schedule_number || 'N/A');
 
         // Column 2: Item #
         const colItem = document.createElement('div');
@@ -1168,15 +1235,8 @@ class ILETSBApp {
     }
 
     updateRecordCount() {
-        const recordCountElement = document.getElementById('recordCount');
-        if (recordCountElement) {
-            // Count unique schedule numbers (check both old and new field names for compatibility)
-            const uniqueScheduleNumbers = [...new Set(this.schedules.map(s => s.schedule_number).filter(n => n))];
-            const scheduleCount = uniqueScheduleNumbers.length;
-            const seriesCount = this.seriesItems.length;
-            recordCountElement.textContent = 
-                `${scheduleCount} schedule${scheduleCount !== 1 ? 's' : ''}, ${seriesCount} series item${seriesCount !== 1 ? 's' : ''}`;
-        }
+        // Use the new refreshCountsUI method for consistency
+        this.refreshCountsUI();
     }
 
     // Unified Detail Pane Management
@@ -1191,7 +1251,6 @@ class ILETSBApp {
     }
 
     _displayDetailsInternal(schedule, seriesItem) {
-        console.log('displayDetails called. Hiding noSelectionMessage.');
         const noSelectionMessage = document.getElementById('noSelectionMessage');
         const tabNavigation = document.getElementById('tabNavigation');
         const seriesTabPanel = document.getElementById('seriesTabPanel');
@@ -1200,7 +1259,6 @@ class ILETSBApp {
         // Hide no selection message
         if (noSelectionMessage) {
             noSelectionMessage.classList.add('hidden');
-            console.log('noSelectionMessage classList after hide:', noSelectionMessage.classList);
         }
         
         // Show tab navigation
@@ -1215,14 +1273,11 @@ class ILETSBApp {
         if (seriesItem !== null) {
             showSeriesTab = true;
             if (seriesItem && Object.keys(seriesItem).length > 0) {
-                // Ensure the dropdown has options before setting its value
-                this.populateSeriesScheduleDropdown();
-                this.populateSeriesForm(seriesItem);
+                // Forms will be populated after tab is made visible
+                this.populateFormsFromSeries(seriesItem);
             } else {
                 const seriesForm = document.getElementById('seriesForm');
                 if (seriesForm) seriesForm.reset();
-                // Refresh dropdown for new/empty form
-                this.populateSeriesScheduleDropdown();
             }
         }
         
@@ -1294,6 +1349,8 @@ class ILETSBApp {
             scheduleTabPanel.classList.toggle('hidden', tabName !== 'schedule');
         }
         
+        // Schedule dropdown removed from Series tab - no longer needed
+        
         // Store current tab for persistence
         this.currentTab = tabName;
     }
@@ -1305,10 +1362,8 @@ class ILETSBApp {
         const scheduleTabPanel = document.getElementById('scheduleTabPanel');
         
         // Show no selection message
-        console.log('hideDetails called. Showing noSelectionMessage.');
         if (noSelectionMessage) {
             noSelectionMessage.classList.remove('hidden');
-            console.log('noSelectionMessage classList after show:', noSelectionMessage.classList);
         }
         
         // Hide tab navigation and panels
@@ -1335,52 +1390,58 @@ class ILETSBApp {
         this.selectedItemId = item._id;
         this.currentSeriesItem = item;
         
-        // Find the related schedule for this series item
-        let relatedSchedule = null;
-        if (item.schedule_id) {
-            relatedSchedule = this.schedules.find(s => s._id === item.schedule_id);
+        // In merged schema, schedule info is stored directly on series record
+        let scheduleInfo = null;
+        if (item.schedule_number) {
+            // Create schedule object from series data for display
+            scheduleInfo = {
+                _id: `sched_${item.schedule_number}`,
+                schedule_number: item.schedule_number,
+                approval_status: item.approval_status,
+                approval_date: item.approval_date,
+                division: item.division,
+                notes: item.notes,
+                tags: item.tags || []
+            };
         }
         
         // Display both schedule and series details
-        this.displayDetails(relatedSchedule, item);
+        this.displayDetails(scheduleInfo, item);
         
         const deleteSeriesBtn = document.getElementById('deleteSeriesBtn');
         if (deleteSeriesBtn) deleteSeriesBtn.classList.remove('hidden');
     }
 
     populateSeriesForm(item) {
-        // Ensure schedule dropdown options exist, then set value below
-        this.populateSeriesScheduleDropdown();
-
         const fields = {
-            'seriesScheduleNum': (item.schedule_id != null ? String(item.schedule_id) : ''),
             'itemNumber': item.item_number || '',
             'seriesTitle': item.record_series_title || '',
-            'seriesDescription': item.description || '',
+            'seriesDescription': item.ui_extras?.seriesDescription || '',
             'datesStart': item.dates_covered_start || '',
             'datesEnd': item.dates_covered_end || '',
             'seriesDivision': item.division || '',
-            'seriesContact': item.contact || '',
-            'seriesLocation': item.location || '',
+            'seriesContact': item.ui_extras?.seriesContact || '',
+            'seriesLocation': item.ui_extras?.seriesLocation || '',
             'retentionText': item.retention_text || '',
-            'retentionTrigger': item.retention_trigger || '',
-            'volumePaper': item.volume_paper_cuft || '',
-            'volumeElectronic': item.volume_electronic_bytes || '',
-            'annualPaper': item.annual_accum_paper_cuft || '',
-            'annualElectronic': item.annual_accum_electronic_bytes || '',
-            'arrangement': item.arrangement || '',
-            'mediaTypes': item.media_types || '',
-            'electronicStandard': item.electronic_records_standard || '',
-            'numberSizeFiles': item.number_size_files || '',
-            'indexFindingAids': item.index_or_finding_aids || '',
-            'ombStatuteRefs': item.omb_or_statute_refs || '',
-            'relatedSeries': item.related_series || '',
-            'representativeName': item.representative_name || '',
-            'representativeTitle': item.representative_title || '',
-            'representativePhone': item.representative_phone || '',
-            'recordsOfficerName': item.records_officer_name || '',
-            'recordsOfficerPhone': item.records_officer_phone || '',
-            'seriesNotes': item.series_notes || ''
+            'retentionTrigger': item.ui_extras?.retentionTrigger || '',
+            'retentionTerm': item.ui_extras?.retentionTerm || '',
+            'volumePaper': item.ui_extras?.volumePaper || '',
+            'volumeElectronic': item.ui_extras?.volumeElectronic || '',
+            'annualPaper': item.ui_extras?.annualPaper || '',
+            'annualElectronic': item.ui_extras?.annualElectronic || '',
+            'arrangement': item.ui_extras?.arrangement || '',
+            'mediaTypes': Array.isArray(item.media_types) ? item.media_types.join(', ') : (item.media_types || ''),
+            'electronicStandard': item.ui_extras?.electronicStandard || '',
+            'numberSizeFiles': item.ui_extras?.numberSizeFiles || '',
+            'indexFindingAids': item.ui_extras?.indexFindingAids || '',
+            'ombStatuteRefs': Array.isArray(item.omb_or_statute_refs) ? item.omb_or_statute_refs.join(', ') : (item.omb_or_statute_refs || ''),
+            'relatedSeries': Array.isArray(item.related_series) ? item.related_series.join(', ') : (item.related_series || ''),
+            'representativeName': item.ui_extras?.representativeName || '',
+            'representativeTitle': item.ui_extras?.representativeTitle || '',
+            'representativePhone': item.ui_extras?.representativePhone || '',
+            'recordsOfficerName': item.ui_extras?.recordsOfficerName || '',
+            'recordsOfficerPhone': item.ui_extras?.recordsOfficerPhone || '',
+            'seriesNotes': item.notes || ''
         };
 
         // Set text and number inputs
@@ -1450,23 +1511,27 @@ class ILETSBApp {
     }
 
     createNewSeriesItem() {
-        console.log('createNewSeriesItem called');
         this.currentSeriesItem = null;
+        this.selectedItemId = null;
         
-        // Show only series section for new series item creation
+        // Clear any existing selection
+        document.querySelectorAll('.result-item').forEach(row => row.classList.remove('selected'));
+        
+        // Show details pane and series tab
         this.displayDetails(null, {});
+        this.switchToTab('series');
         
+        // Reset the form
         const seriesForm = document.getElementById('seriesForm');
-        console.log('seriesForm element found:', !!seriesForm);
         if (seriesForm) seriesForm.reset();
         
         const deleteSeriesBtn = document.getElementById('deleteSeriesBtn');
-        const seriesScheduleNumInput = document.getElementById('seriesScheduleNum');
         
         if (deleteSeriesBtn) deleteSeriesBtn.classList.add('hidden');
-        // Populate the schedule dropdown and focus it
-        this.populateSeriesScheduleDropdown();
-        if (seriesScheduleNumInput) seriesScheduleNumInput.focus();
+        
+        // Focus on the item number field since schedule dropdown was removed
+        const itemNumberInput = document.getElementById('itemNumber');
+        if (itemNumberInput) itemNumberInput.focus();
     }
 
     async handleScheduleSubmit(e) {
@@ -1503,132 +1568,41 @@ class ILETSBApp {
 
     async handleSeriesSubmit(e) {
         e.preventDefault();
-        console.log('handleSeriesSubmit called');
         
-        // Validation
-        const seriesScheduleNumEl = document.getElementById('seriesScheduleNum');
-        const itemNumberEl = document.getElementById('itemNumber');
+        // Basic validation
         const seriesTitleEl = document.getElementById('seriesTitle');
-        
-        console.log('Field elements found:', {
-            seriesScheduleNum: !!seriesScheduleNumEl,
-            itemNumber: !!itemNumberEl,
-            seriesTitle: !!seriesTitleEl
-        });
-        
-        if (!seriesScheduleNumEl) {
-            console.error('seriesScheduleNum element not found');
-            this.setStatus('Form error: Schedule Number field not found', 'error');
-            return;
-        }
-        
-        if (!itemNumberEl) {
-            console.error('itemNumber element not found');
-            this.setStatus('Form error: Item Number field not found', 'error');
-            return;
-        }
-        
-        if (!seriesTitleEl) {
-            console.error('seriesTitle element not found');
-            this.setStatus('Form error: Series Title field not found', 'error');
-            return;
-        }
-        
-        if (!seriesScheduleNumEl.value.trim()) {
-            this.setStatus('Schedule is required', 'error');
-            return;
-        }
-        // Relationship validation: ensure selected schedule exists by internal id
-        const selectedScheduleIdStr = seriesScheduleNumEl.value.trim();
-        const selectedScheduleId = Number.isNaN(Number(selectedScheduleIdStr)) ? selectedScheduleIdStr : parseInt(selectedScheduleIdStr, 10);
-        const relatedSchedule = (this.schedules || []).find(s => String(s._id) === String(selectedScheduleId));
-        if (!relatedSchedule) {
-            this.setStatus('Selected Schedule does not exist. Please choose a valid schedule.', 'error');
-            return;
-        }
-        
-        if (!itemNumberEl.value.trim()) {
-            this.setStatus('Item Number is required', 'error');
-            return;
-        }
-        
-        if (!seriesTitleEl.value.trim()) {
+        if (!seriesTitleEl || !seriesTitleEl.value.trim()) {
             this.setStatus('Record Series Title is required', 'error');
             return;
         }
 
-        // We already validated and resolved relatedSchedule above using schedule_id
-        // relatedSchedule contains the selected schedule object
+        // Validate schedule number format if provided
+        const scheduleNumEl = document.getElementById('scheduleNum');
+        if (scheduleNumEl && scheduleNumEl.value.trim()) {
+            if (!this.validateScheduleNumber(scheduleNumEl.value.trim())) {
+                this.setStatus('Schedule Number must be in format ##-### (e.g., 25-001)', 'error');
+                return;
+            }
+        }
 
-        const item = {
-            // No application_number field on series items
-            schedule_id: relatedSchedule._id,
-            item_number: document.getElementById('itemNumber').value,
-            record_series_title: document.getElementById('seriesTitle').value,
-            description: document.getElementById('seriesDescription').value,
-            dates_covered_start: document.getElementById('datesStart').value,
-            dates_covered_end: document.getElementById('datesEnd').value,
-            arrangement: document.getElementById('arrangement').value,
-            volume_paper_cuft: parseFloat(document.getElementById('volumePaper').value) || 0,
-            volume_electronic_bytes: parseFloat(document.getElementById('volumeElectronic').value) || 0,
-            annual_accum_paper_cuft: parseFloat(document.getElementById('annualPaper').value) || 0,
-            annual_accum_electronic_bytes: parseFloat(document.getElementById('annualElectronic').value) || 0,
-            retention_text: document.getElementById('retentionText').value,
-            retention_trigger: document.getElementById('retentionTrigger').value,
-            division: document.getElementById('seriesDivision').value,
-            contact: document.getElementById('seriesContact').value,
-            location: document.getElementById('seriesLocation').value,
-            representative_name: document.getElementById('representativeName').value,
-            representative_title: document.getElementById('representativeTitle').value,
-            representative_phone: document.getElementById('representativePhone').value,
-            records_officer_name: document.getElementById('recordsOfficerName').value,
-            records_officer_phone: document.getElementById('recordsOfficerPhone').value,
-            media_types: document.getElementById('mediaTypes').value,
-            electronic_records_standard: document.getElementById('electronicStandard').value,
-            number_size_files: document.getElementById('numberSizeFiles').value,
-            index_or_finding_aids: document.getElementById('indexFindingAids').value,
-            omb_or_statute_refs: document.getElementById('ombStatuteRefs').value,
-            related_series: document.getElementById('relatedSeries').value,
-            series_notes: document.getElementById('seriesNotes').value,
-            updated_at: new Date().toISOString()
-        };
-
-        if (this.currentSeriesItem) {
-            item._id = this.currentSeriesItem._id;
-        } else {
-            item.created_at = new Date().toISOString();
+        // Validate item number format if provided
+        const itemNumberEl = document.getElementById('itemNumber');
+        if (itemNumberEl && itemNumberEl.value.trim()) {
+            if (!this.validateItemNumber(itemNumberEl.value.trim())) {
+                this.setStatus('Item Number format is invalid', 'error');
+                return;
+            }
         }
 
         try {
-            // Check for duplicate item numbers within the same schedule
-            const duplicate = await this.checkDuplicateItemNumber(
-                item.schedule_id, 
-                item.item_number, 
-                this.currentSeriesItem?._id
-            );
-            
-            if (duplicate) {
-                const proceed = await this.showConfirmModal(
-                    'Duplicate Item Number',
-                    `Item number "${item.item_number}" already exists for this schedule. Do you want to continue anyway?`
-                );
-                if (!proceed) return;
-            }
-
-            if (this.currentSeriesItem) {
-                await this.saveSeriesItem(item, true);
-            } else {
-                await this.saveSeriesItem(item);
-            }
-            
-            this.setStatus('Series item saved successfully', 'success');
-            await this.updateUI();
+            // Use the new v3.1 save function
+            await this.saveSeriesFromForms();
             this.cancelSeriesEdit();
             // Force refresh after form is closed
             setTimeout(() => this.applyFilters(), 100);
         } catch (error) {
             ErrorHandler.log(error, 'Series save', APP_CONSTANTS.ERROR_TYPES.DATABASE);
-            this.setStatus('Error saving series item: ' + error.message, 'error');
+            this.setStatus('Error saving series: ' + error.message, 'error');
         }
     }
 
@@ -1646,93 +1620,61 @@ class ILETSBApp {
     }
 
     clearSelectionAndHideDetails() {
-        console.log('clearSelectionAndHideDetails called');
         document.querySelectorAll('.result-item.selected').forEach(row => row.classList.remove('selected'));
         this.selectedItemId = null;
         this.hideDetails();
     }
 
-    // Import/Export
+    // Import/Export v3.1
     async exportData() {
         try {
             const seriesItems = await this.getAllSeries();
             const auditEvents = await this.getAllAuditEvents();
             
-            // Clean up export data for merged model
+            // Export in v3.1 format with schedule_number terminology
             const cleanSeries = seriesItems.map(item => {
                 const cleanItem = {
-                    record_series_title: item.record_series_title,
-                    description: item.description,
-                    dates_covered_start: item.dates_covered_start,
-                    dates_covered_end: item.dates_covered_end,
-                    open_ended: item.open_ended,
-                    division: item.division,
-                    contact: item.contact,
-                    location: item.location,
-                    retention_text: item.retention_text,
-                    retention: item.retention,
-                    retention_is_permanent: item.retention_is_permanent,
-                    volume_paper_cuft: item.volume_paper_cuft,
-                    volume_electronic_bytes: item.volume_electronic_bytes,
-                    annual_accum_paper_cuft: item.annual_accum_paper_cuft,
-                    annual_accum_electronic_bytes: item.annual_accum_electronic_bytes,
-                    arrangement: item.arrangement,
+                    schedule_number: item.schedule_number || null,
+                    item_number: item.item_number || null,
+                    record_series_title: item.record_series_title || null,
+                    division: item.division || null,
+                    approval_status: item.approval_status || null,
+                    approval_date: item.approval_date || null,
+                    dates_covered_start: item.dates_covered_start || null,
+                    dates_covered_end: item.dates_covered_end || null,
+                    tags: item.tags || [],
                     media_types: item.media_types || [],
-                    electronic_records_standard: item.electronic_records_standard,
-                    number_size_files: item.number_size_files,
-                    index_or_finding_aids: item.index_or_finding_aids,
                     omb_or_statute_refs: item.omb_or_statute_refs || [],
                     related_series: item.related_series || [],
-                    series_notes: item.series_notes,
-                    representative_name: item.representative_name,
-                    representative_title: item.representative_title,
-                    representative_phone: item.representative_phone,
-                    records_officer_name: item.records_officer_name,
-                    records_officer_phone: item.records_officer_phone,
-                    tags: item.tags || []
+                    retention_text: item.retention_text || null,
+                    notes: item.notes || null,
+                    ui_extras: item.ui_extras || {},
+                    created_at: item.created_at || null,
+                    updated_at: item.updated_at || null,
+                    version: item.version || 1
                 };
-                
-                // Include schedule assignment fields if present
-                if (item.application_number) {
-                    cleanItem.application_number = item.application_number;
-                }
-                if (item.item_number) {
-                    cleanItem.item_number = item.item_number;
-                }
-                if (item.approval_status) {
-                    cleanItem.approval_status = item.approval_status;
-                }
-                if (item.approval_date) {
-                    cleanItem.approval_date = item.approval_date;
-                }
-                if (item.notes) {
-                    cleanItem.notes = item.notes;
-                }
                 
                 return cleanItem;
             });
             
             const exportData = {
                 exported_at: new Date().toISOString(),
-                version: 1,
-                agency: {
-                    name: "Illinois Law Enforcement Training and Standards Board",
-                    abbrev: "ILETSB"
-                },
+                version: "3.1",
+                agency: "ILETSB",
                 series: cleanSeries,
-                audit_events: []
+                audit_events: auditEvents || []
             };
 
             const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `iletsb-records-${new Date().toISOString().split('T')[0]}.json`;
+            a.download = `iletsb-records-v3.1-${new Date().toISOString().split('T')[0]}.json`;
             a.click();
             URL.revokeObjectURL(url);
             
-            await this.logAuditEvent('system', null, 'export', { recordCount: seriesItems.length });
-            this.setStatus('Data exported successfully', 'success');
+            await this.logAuditEvent('system', null, 'export', { recordCount: seriesItems.length, version: "3.1" });
+            this.setStatus('Data exported successfully (v3.1 format)', 'success');
         } catch (error) {
             ErrorHandler.log(error, 'Data export', APP_CONSTANTS.ERROR_TYPES.EXPORT);
             this.setStatus('Error exporting data: ' + error.message, 'error');
@@ -1765,25 +1707,33 @@ class ILETSBApp {
                 auditEvents: { created: 0, updated: 0, skipped: 0, errors: [] }
             };
 
-            // Import series (merged model)
+            // Import series (v3.1 with legacy support)
             const seriesArray = data.series || data.series_items || [];
             this.logImportMessage(`Processing ${seriesArray.length} series items...`);
             
             for (const item of seriesArray) {
                 try {
-                    const identifier = `${item.application_number || 'unassigned'}-${item.item_number || 'no-item'}`;
+                    // Legacy support: map application_number to schedule_number
+                    if (item.application_number && !item.schedule_number) {
+                        item.schedule_number = item.application_number;
+                        delete item.application_number;
+                    }
+                    
+                    const identifier = `${item.schedule_number || 'unassigned'}-${item.item_number || 'no-item'}`;
                     this.logImportMessage(`Importing series ${identifier}: ${item.record_series_title}...`);
                     
-                    const result = await this.upsertSeries(item);
+                    const result = await this.upsertSeriesV31(item);
                     results.series[result.action]++;
                     this.logImportMessage(`Series ${identifier} ${result.action} successfully`);
                 } catch (error) {
-                    const identifier = `${item.application_number || 'unassigned'}-${item.item_number || 'no-item'}`;
+                    const identifier = `${item.schedule_number || item.application_number || 'unassigned'}-${item.item_number || 'no-item'}`;
                     results.series.errors.push(`Series ${identifier}: ${error.message}`);
                     results.series.skipped++;
                     this.logImportMessage(`Error importing series: ${error.message}`);
                 }
-                this.updateImportCounts(results.series.created + results.series.updated, 0);
+                
+                // Update counts with unique schedule numbers (remove await to prevent blocking)
+                this.updateRecordCount();
             }
 
             // Show final results
@@ -1801,7 +1751,8 @@ class ILETSBApp {
             
             await this.logAuditEvent('system', null, 'import', results);
             this.showImportSummary(results);
-            await this.updateUI();
+            // Force UI refresh after import completes
+            await this.loadDataOptimized();
         } catch (error) {
             ErrorHandler.log(error, 'Data import', APP_CONSTANTS.ERROR_TYPES.IMPORT);
             this.updateImportStatus('Import failed');
@@ -1827,9 +1778,10 @@ class ILETSBApp {
                     errors.push(`Series item ${i}: Missing record_series_title (required)`);
                 }
                 
-                // Validate application_number format if present
-                if (item.application_number && !/^\d{2}-\d{3}$/.test(item.application_number)) {
-                    errors.push(`Series item ${i}: Invalid application_number format (expected XX-XXX)`);
+                // Validate schedule_number format if present (support both new and legacy field names)
+                const scheduleNumber = item.schedule_number || item.application_number;
+                if (scheduleNumber && !/^\d{2}-\d{3}$/.test(scheduleNumber)) {
+                    errors.push(`Series item ${i}: Invalid schedule_number format (expected XX-XXX)`);
                 }
                 
                 // Validate item_number format if present
@@ -1842,28 +1794,22 @@ class ILETSBApp {
                     errors.push(`Series item ${i}: Invalid approval_status (must be one of: ${validStatuses.join(', ')})`);
                 }
                 
-                // Validate tags array if present
-                if (item.tags && !Array.isArray(item.tags)) {
-                    errors.push(`Series item ${i}: tags must be an array`);
-                }
-                
-                // Validate dates_covered_start format if present
-                if (item.dates_covered_start && !/^\d{4}(-\d{2}(-\d{2})?)?$/.test(item.dates_covered_start)) {
+                // Validate dates if present
+                if (item.dates_covered_start && !/^\d{4}(-\d{2})?(-\d{2})?$/.test(item.dates_covered_start)) {
                     errors.push(`Series item ${i}: Invalid dates_covered_start format (expected YYYY, YYYY-MM, or YYYY-MM-DD)`);
                 }
                 
-                // Validate arrays
-                if (item.media_types && !Array.isArray(item.media_types)) {
-                    errors.push(`Series item ${i}: media_types must be an array`);
+                if (item.dates_covered_end && item.dates_covered_end !== 'present' && !/^\d{4}(-\d{2})?(-\d{2})?$/.test(item.dates_covered_end)) {
+                    errors.push(`Series item ${i}: Invalid dates_covered_end format (expected YYYY, YYYY-MM, YYYY-MM-DD, or "present")`);
                 }
                 
-                if (item.omb_or_statute_refs && !Array.isArray(item.omb_or_statute_refs)) {
-                    errors.push(`Series item ${i}: omb_or_statute_refs must be an array`);
-                }
-                
-                if (item.related_series && !Array.isArray(item.related_series)) {
-                    errors.push(`Series item ${i}: related_series must be an array`);
-                }
+                // Validate arrays (allow both arrays and strings for legacy compatibility)
+                const arrayFields = ['tags', 'media_types', 'omb_or_statute_refs', 'related_series'];
+                arrayFields.forEach(field => {
+                    if (item[field] && !Array.isArray(item[field]) && typeof item[field] !== 'string') {
+                        errors.push(`Series item ${i}: ${field} must be an array or string`);
+                    }
+                });
             });
         }
         
@@ -2267,278 +2213,6 @@ class ILETSBApp {
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
 
-    // CSV Import Functions
-    async handleCsvFile(event) {
-        const file = event.target.files[0];
-        if (!file) return;
-
-        try {
-            const text = await file.text();
-            const csvData = this.parseCSV(text);
-            
-            if (csvData.length < 2) {
-                throw new Error('CSV file must contain at least a header row and one data row');
-            }
-
-            this.csvData = csvData;
-            this.showCsvImportModal(csvData);
-        } catch (error) {
-            ErrorHandler.log(error, 'CSV parsing', APP_CONSTANTS.ERROR_TYPES.IMPORT);
-            this.setStatus('Error reading CSV file: ' + error.message, 'error');
-        }
-        
-        // Reset file input
-        event.target.value = '';
-    }
-
-    parseCSV(text) {
-        const lines = text.split('\n').map(line => line.trim()).filter(line => line);
-        const result = [];
-        
-        for (const line of lines) {
-            const row = [];
-            let current = '';
-            let inQuotes = false;
-            
-            for (let i = 0; i < line.length; i++) {
-                const char = line[i];
-                
-                if (char === '"') {
-                    inQuotes = !inQuotes;
-                } else if (char === ',' && !inQuotes) {
-                    row.push(current.trim());
-                    current = '';
-                } else {
-                    current += char;
-                }
-            }
-            
-            row.push(current.trim());
-            result.push(row);
-        }
-        
-        return result;
-    }
-
-    showCsvImportModal(csvData) {
-        const modal = document.getElementById('csvImportModal');
-        const preview = document.getElementById('csvPreview');
-        const mapping = document.getElementById('columnMapping');
-        
-        // Show preview of first 5 rows
-        const previewData = csvData.slice(0, 5);
-        DOMHelper.clearElement(preview);
-        preview.appendChild(this.createCsvPreviewTable(previewData));
-        
-        // Create column mapping controls
-        DOMHelper.clearElement(mapping);
-        mapping.appendChild(this.createColumnMappingControls(csvData[0]));
-        
-        modal.classList.remove('hidden');
-    }
-
-    createCsvPreviewTable(data) {
-        if (data.length === 0) {
-            const p = document.createElement('p');
-            p.textContent = 'No data to preview';
-            return p;
-        }
-        
-        const table = document.createElement('table');
-        const thead = document.createElement('thead');
-        const tbody = document.createElement('tbody');
-        
-        // Create header row
-        const headerRow = document.createElement('tr');
-        data[0].forEach((header, index) => {
-            const th = document.createElement('th');
-            DOMHelper.setTextContent(th, `Column ${index + 1}: ${header}`);
-            headerRow.appendChild(th);
-        });
-        thead.appendChild(headerRow);
-        
-        // Create data rows
-        for (let i = 1; i < data.length; i++) {
-            const row = document.createElement('tr');
-            data[i].forEach(cell => {
-                const td = document.createElement('td');
-                DOMHelper.setTextContent(td, cell || '');
-                row.appendChild(td);
-            });
-            tbody.appendChild(row);
-        }
-        
-        table.appendChild(thead);
-        table.appendChild(tbody);
-        return table;
-    }
-
-    createColumnMappingControls(headers) {
-        const seriesFields = [
-            { key: '', label: '-- Skip Column --' },
-            { key: 'application_number', label: 'Schedule Number *' },
-            { key: 'item_number', label: 'Item Number *' },
-            { key: 'record_series_title', label: 'Record Series Title *' },
-            { key: 'description', label: 'Description' },
-            { key: 'dates_covered_start', label: 'Dates Covered Start' },
-            { key: 'dates_covered_end', label: 'Dates Covered End' },
-            { key: 'arrangement', label: 'Arrangement' },
-            { key: 'volume_paper_cuft', label: 'Paper Volume (cu ft)' },
-            { key: 'volume_electronic_bytes', label: 'Electronic Volume (bytes)' },
-            { key: 'annual_accum_paper_cuft', label: 'Annual Paper (cu ft)' },
-            { key: 'annual_accum_electronic_bytes', label: 'Annual Electronic (bytes)' },
-            { key: 'retention_text', label: 'Retention Text' },
-            { key: 'retention_trigger', label: 'Retention Trigger' },
-            { key: 'division', label: 'Division' },
-            { key: 'contact', label: 'Contact' },
-            { key: 'location', label: 'Location' },
-            { key: 'representative_name', label: 'Representative Name' },
-            { key: 'representative_title', label: 'Representative Title' },
-            { key: 'representative_phone', label: 'Representative Phone' },
-            { key: 'records_officer_name', label: 'Records Officer Name' },
-            { key: 'records_officer_phone', label: 'Records Officer Phone' },
-            { key: 'media_types', label: 'Media Types' },
-            { key: 'electronic_records_standard', label: 'Electronic Records Standard' },
-            { key: 'number_size_files', label: 'Number Size Files' },
-            { key: 'index_or_finding_aids', label: 'Index or Finding Aids' },
-            { key: 'omb_or_statute_refs', label: 'OMB or Statute References' },
-            { key: 'related_series', label: 'Related Series' },
-            { key: 'series_notes', label: 'Series Notes' }
-        ];
-
-        const container = document.createElement('div');
-        
-        headers.forEach((header, index) => {
-            const mappingRow = document.createElement('div');
-            mappingRow.className = 'mapping-row';
-            
-            const label = document.createElement('label');
-            DOMHelper.setTextContent(label, `CSV Column: "${header}"`);
-            
-            const select = document.createElement('select');
-            select.className = 'column-mapping-select';
-            select.dataset.column = index;
-            select.id = `mapping_${index}`;
-            
-            seriesFields.forEach(field => {
-                select.appendChild(DOMHelper.createOption(field.key, field.label));
-            });
-            
-            mappingRow.appendChild(label);
-            mappingRow.appendChild(select);
-            container.appendChild(mappingRow);
-        });
-        
-        return container;
-    }
-
-    hideCsvModal() {
-        const modal = document.getElementById('csvImportModal');
-        modal.classList.add('hidden');
-        this.csvData = null;
-    }
-
-    async processCsvImport() {
-        try {
-            const headers = this.csvData[0];
-            const mapping = {};
-            
-            // Build mapping from CSV columns to database fields
-            headers.forEach((header, index) => {
-                const select = document.getElementById(`mapping_${index}`);
-                if (select && select.value) {
-                    mapping[index] = select.value;
-                }
-            });
-
-            // Validate required fields are mapped
-            const requiredFields = ['application_number', 'item_number', 'record_series_title'];
-            const mappedFields = Object.values(mapping);
-            const missingRequired = requiredFields.filter(field => !mappedFields.includes(field));
-            
-            if (missingRequired.length > 0) {
-                throw new Error(`Required fields not mapped: ${missingRequired.join(', ')}`);
-            }
-
-            const results = {
-                created: 0,
-                updated: 0,
-                skipped: 0,
-                errors: []
-            };
-
-            // Process each data row
-            for (let i = 1; i < this.csvData.length; i++) {
-                try {
-                    const row = this.csvData[i];
-                    const item = this.mapCsvRowToItem(row, mapping);
-                    
-                    if (item.application_number && item.item_number && item.record_series_title) {
-                        const result = await this.upsertSeriesItem(item);
-                        results[result.action]++;
-                    } else {
-                        results.skipped++;
-                        results.errors.push(`Row ${i + 1}: Missing required fields`);
-                    }
-                } catch (error) {
-                    results.skipped++;
-                    results.errors.push(`Row ${i + 1}: ${error.message}`);
-                }
-            }
-
-            await this.logAuditEvent('system', null, 'csv_import', results);
-            
-            this.hideCsvModal();
-            this.showCsvImportSummary(results);
-            await this.updateUI();
-        } catch (error) {
-            ErrorHandler.log(error, 'CSV import', APP_CONSTANTS.ERROR_TYPES.IMPORT);
-            this.setStatus('Error importing CSV: ' + error.message, 'error');
-        }
-    }
-
-    mapCsvRowToItem(row, mapping) {
-        const item = {
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-        };
-
-        Object.entries(mapping).forEach(([csvIndex, fieldName]) => {
-            const value = row[parseInt(csvIndex)]?.trim();
-            if (value) {
-                // Type conversion based on field
-                if (fieldName.includes('volume') || fieldName.includes('term')) {
-                    item[fieldName] = parseFloat(value) || 0;
-                } else {
-                    item[fieldName] = value;
-                }
-            }
-        });
-
-        return item;
-    }
-
-    hideCsvModal() {
-        const modal = document.getElementById('csvImportModal');
-        modal.classList.add('hidden');
-        this.csvData = null;
-    }
-
-    showCsvImportSummary(results) {
-        const total = results.created + results.updated;
-        let message = `CSV import completed: ${total} series items (${results.created} new, ${results.updated} updated)`;
-        
-        if (results.skipped > 0) {
-            message += `, ${results.skipped} skipped`;
-        }
-        
-        if (results.errors.length > 0) {
-            message += `. ${results.errors.length} errors occurred.`;
-            ErrorHandler.log(new Error('CSV import validation errors'), 'CSV import validation', APP_CONSTANTS.ERROR_TYPES.VALIDATION);
-        }
-
-        this.setStatus(message, results.errors.length > 0 ? 'warning' : 'success');
-    }
 
     // Quality Control Features
 
@@ -2628,26 +2302,6 @@ class ILETSBApp {
     }
 
     // Reporting and Export Enhancements
-    async printReport() {
-        try {
-            const filteredItems = await this.getFilteredItems();
-            const reportHtml = this.generateReportHtml(filteredItems);
-            
-            // Create a new window for printing
-            const printWindow = window.open('', '_blank');
-            printWindow.document.write(reportHtml);
-            printWindow.document.close();
-            
-            // Wait for content to load then print
-            printWindow.onload = () => {
-                printWindow.print();
-                printWindow.close();
-            };
-        } catch (error) {
-            ErrorHandler.log(error, 'Print report', APP_CONSTANTS.ERROR_TYPES.EXPORT);
-            this.setStatus('Error generating print report: ' + error.message, 'error');
-        }
-    }
 
     async exportFilteredData() {
         try {
@@ -2693,9 +2347,8 @@ class ILETSBApp {
                 const cursor = event.target.result;
                 if (cursor) {
                     const item = { ...cursor.value, _id: cursor.key };
-                    if (this.matchesCurrentFilters(item)) {
-                        items.push(item);
-                    }
+                    // Use new search system instead of old filter matching
+                    items.push(item);
                     cursor.continue();
                 } else {
                     resolve(items);
@@ -2739,151 +2392,6 @@ class ILETSBApp {
         return filters;
     }
 
-    generateReportHtml(items) {
-        const activeFilters = this.getActiveFilters();
-        const filterSummary = Object.keys(activeFilters).length > 0 
-            ? Object.entries(activeFilters).map(([key, value]) => 
-                `<li><strong>${key}:</strong> ${typeof value === 'object' ? JSON.stringify(value) : value}</li>`
-              ).join('')
-            : '<li>No filters applied</li>';
-
-        const itemRows = items.map(item => {
-            const itemWithQuality = this.addQualityIndicators(item);
-            const completeness = itemWithQuality.qualityIndicators.completeness;
-            const retentionFlags = itemWithQuality.qualityIndicators.retentionFlags;
-            const schedule = this.schedules.find(s => s.application_number === item.application_number);
-            const approvalStatus = schedule ? (schedule.approval_status || 'Unapproved') : 'Unapproved';
-
-            return `
-                <tr>
-                    <td>${item.application_number || 'N/A'}</td>
-                    <td>${item.item_number || 'N/A'}</td>
-                    <td>${item.record_series_title || 'Untitled'}</td>
-                    <td>${approvalStatus}</td>
-                    <td>${item.division || 'N/A'}</td>
-                    <td>${item.retention_text || 'Not specified'}</td>
-                    <td>${this.formatDateRange(item.dates_covered_start, item.dates_covered_end)}</td>
-                    <td>${completeness}%</td>
-                </tr>
-            `;
-        }).join('');
-
-        return `
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>ILETSB Records Retention Inventory Report</title>
-                <style>
-                    body { 
-                        font-family: Arial, sans-serif; 
-                        margin: 20px; 
-                        font-size: 12px;
-                        line-height: 1.4;
-                    }
-                    .header { 
-                        text-align: center; 
-                        margin-bottom: 30px; 
-                        border-bottom: 2px solid #333;
-                        padding-bottom: 15px;
-                    }
-                    .header h1 { 
-                        margin: 0; 
-                        color: #333; 
-                        font-size: 24px;
-                    }
-                    .header .subtitle { 
-                        color: #666; 
-                        margin-top: 5px;
-                        font-size: 14px;
-                    }
-                    .summary { 
-                        margin-bottom: 20px; 
-                        background: #f5f5f5; 
-                        padding: 15px; 
-                        border-radius: 5px;
-                    }
-                    .summary h3 { 
-                        margin-top: 0; 
-                        color: #333;
-                    }
-                    .summary ul { 
-                        margin: 10px 0; 
-                        padding-left: 20px;
-                    }
-                    table { 
-                        width: 100%; 
-                        border-collapse: collapse; 
-                        margin-top: 15px;
-                    }
-                    th, td { 
-                        border: 1px solid #ddd; 
-                        padding: 8px; 
-                        text-align: left; 
-                        font-size: 11px;
-                    }
-                    th { 
-                        background-color: #f2f2f2; 
-                        font-weight: bold;
-                    }
-                    tr:nth-child(even) { 
-                        background-color: #f9f9f9; 
-                    }
-                    .footer { 
-                        margin-top: 30px; 
-                        text-align: center; 
-                        color: #666; 
-                        font-size: 10px;
-                        border-top: 1px solid #ddd;
-                        padding-top: 15px;
-                    }
-                    @media print {
-                        body { margin: 0; }
-                        .header { page-break-after: avoid; }
-                        table { page-break-inside: avoid; }
-                        tr { page-break-inside: avoid; }
-                    }
-                </style>
-            </head>
-            <body>
-                <div class="header">
-                    <h1>Illinois Law Enforcement Training & Standards Board</h1>
-                    <div class="subtitle">Records Retention Inventory Report</div>
-                    <div class="subtitle">Generated on ${new Date().toLocaleDateString()} at ${new Date().toLocaleTimeString()}</div>
-                </div>
-
-                <div class="summary">
-                    <h3>Report Summary</h3>
-                    <p><strong>Total Records:</strong> ${items.length}</p>
-                    <h4>Active Filters:</h4>
-                    <ul>${filterSummary}</ul>
-                </div>
-
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Schedule #</th>
-                            <th>Item #</th>
-                            <th>Record Series Title</th>
-                            <th>Approval Status</th>
-                            <th>Division</th>
-                            <th>Retention</th>
-                            <th>Dates Covered</th>
-                            <th>Completeness</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${itemRows}
-                    </tbody>
-                </table>
-
-                <div class="footer">
-                    <p>This report was generated by the ILETSB Records Retention Inventory system.</p>
-                    <p>For questions or corrections, please contact the Records Management Office.</p>
-                </div>
-            </body>
-            </html>
-        `;
-    }
 
     formatDateRange(startDate, endDate) {
         if (!startDate && !endDate) return 'No dates specified';
@@ -3057,7 +2565,17 @@ class ILETSBApp {
     }
 
     async clearDatabase() {
+        // Prevent concurrent executions
+        if (this._clearingDatabase) {
+            console.warn('Database clear already in progress, ignoring duplicate request');
+            return;
+        }
+        
+        this._clearingDatabase = true;
+        
         try {
+            this.setStatus('Clearing database...', 'info');
+            
             if (!this.db) {
                 await this.initDatabase();
             }
@@ -3094,6 +2612,9 @@ class ILETSBApp {
         } catch (error) {
             ErrorHandler.log(error, 'Clear Database', APP_CONSTANTS.ERROR_TYPES.DATABASE);
             this.setStatus('Failed to clear database', 'error');
+        } finally {
+            // Always reset the flag
+            this._clearingDatabase = false;
         }
     }
 
@@ -3125,6 +2646,258 @@ class ILETSBApp {
                 this.hideImportStatus();
             }
         });
+    }
+
+    // v3.1 Save/Load Adapters
+    
+    // Helper function to convert input to array
+    toArr(input) {
+        if (Array.isArray(input)) return input;
+        if (!input) return [];
+        return String(input).split(/[,;\n]/).map(s => s.trim()).filter(Boolean);
+    }
+
+    // Collect all form values and save as series record
+    async saveSeriesFromForms() {
+        try {
+            // Read schedule number from Series Details tab dropdown
+            const schedule_number = document.getElementById('seriesScheduleNum')?.value?.trim() || null;
+            const approval_status = document.getElementById('approvalStatus')?.value || null;
+            const approval_date = document.getElementById('approvalDate')?.value || null;
+            const division = document.getElementById('scheduleDivision')?.value?.trim() || null;
+            const tags = this.toArr(document.getElementById('scheduleTags')?.value);
+
+            // Read Series Details
+            const item_number = document.getElementById('itemNumber')?.value?.trim() || null;
+            const record_series_title = document.getElementById('seriesTitle')?.value?.trim() || null;
+            const dates_covered_start = document.getElementById('datesStart')?.value?.trim() || null;
+            const dates_covered_end = document.getElementById('datesEnd')?.value?.trim() || null;
+            const retention_text = document.getElementById('retentionText')?.value || null;
+            const notes = document.getElementById('seriesNotes')?.value || null;
+
+            const media_types = this.toArr(document.getElementById('mediaTypes')?.value);
+            const omb_or_statute_refs = this.toArr(document.getElementById('ombStatuteRefs')?.value);
+            const related_series = this.toArr(document.getElementById('relatedSeries')?.value);
+
+            // Everything else goes into ui_extras (captured verbatim)
+            const ui_extras = {
+                seriesDescription: document.getElementById('seriesDescription')?.value || null,
+                seriesContact: document.getElementById('seriesContact')?.value || null,
+                seriesLocation: document.getElementById('seriesLocation')?.value || null,
+                retentionTerm: document.getElementById('retentionTerm')?.value || null,
+                retentionTrigger: document.getElementById('retentionTrigger')?.value || null,
+                volumePaper: document.getElementById('volumePaper')?.value || null,
+                volumeElectronic: document.getElementById('volumeElectronic')?.value || null,
+                annualPaper: document.getElementById('annualPaper')?.value || null,
+                annualElectronic: document.getElementById('annualElectronic')?.value || null,
+                arrangement: document.getElementById('arrangement')?.value || null,
+                electronicStandard: document.getElementById('electronicStandard')?.value || null,
+                numberSizeFiles: document.getElementById('numberSizeFiles')?.value || null,
+                indexFindingAids: document.getElementById('indexFindingAids')?.value || null,
+                representativeName: document.getElementById('representativeName')?.value || null,
+                representativeTitle: document.getElementById('representativeTitle')?.value || null,
+                representativePhone: document.getElementById('representativePhone')?.value || null,
+                recordsOfficerName: document.getElementById('recordsOfficerName')?.value || null,
+                recordsOfficerPhone: document.getElementById('recordsOfficerPhone')?.value || null,
+                scheduleNotes: document.getElementById('scheduleNotes')?.value || null
+            };
+
+            const now = new Date().toISOString();
+            const row = {
+                schedule_number, item_number, record_series_title,
+                division, approval_status, approval_date,
+                dates_covered_start, dates_covered_end,
+                tags, media_types, omb_or_statute_refs, related_series,
+                retention_text, notes, ui_extras,
+                updated_at: now
+            };
+
+            // Upsert by [schedule_number+item_number] when both present
+            const existing = (schedule_number && item_number)
+                ? await this.findSeriesByScheduleAndItem(schedule_number, item_number)
+                : null;
+
+            if (existing) {
+                row._id = existing._id;
+                row.created_at = existing.created_at || now;
+                row.version = (existing.version || 0) + 1;
+                await this.saveSeries(row, true);
+                await this.logAuditEvent('series', row._id, 'update', row);
+            } else {
+                row.created_at = now;
+                row.version = 1;
+                const savedItem = await this.saveSeries(row, false);
+                await this.logAuditEvent('series', savedItem._id, 'create', row);
+            }
+
+            // Refresh UI
+            await this.updateUI();
+            this.setStatus('Series saved successfully', 'success');
+            
+        } catch (error) {
+            ErrorHandler.log(error, 'Save series from forms');
+            this.setStatus('Error saving series: ' + error.message, 'error');
+        }
+    }
+
+    // Find series by schedule_number and item_number combination
+    async findSeriesByScheduleAndItem(scheduleNumber, itemNumber) {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['series'], 'readonly');
+            const store = transaction.objectStore('series');
+            const index = store.index('schedule_number_item_number');
+            const request = index.get([scheduleNumber, itemNumber]);
+            
+            request.onsuccess = () => resolve(request.result || null);
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    // Load series data into forms (reverse mapping)
+    populateFormsFromSeries(seriesItem) {
+        if (!seriesItem) return;
+
+        try {
+            // Populate Schedule Details
+            this.setFormValue('scheduleNum', seriesItem.schedule_number);
+            this.setFormValue('approvalStatus', seriesItem.approval_status);
+            this.setFormValue('approvalDate', seriesItem.approval_date);
+            this.setFormValue('scheduleDivision', seriesItem.division);
+            this.setFormValue('scheduleTags', Array.isArray(seriesItem.tags) ? seriesItem.tags.join(', ') : '');
+
+            // Populate Series Details
+            this.setFormValue('itemNumber', seriesItem.item_number);
+            this.setFormValue('seriesTitle', seriesItem.record_series_title);
+            this.setFormValue('datesStart', seriesItem.dates_covered_start);
+            this.setFormValue('datesEnd', seriesItem.dates_covered_end);
+            this.setFormValue('retentionText', seriesItem.retention_text);
+            this.setFormValue('seriesNotes', seriesItem.notes);
+
+            this.setFormValue('mediaTypes', Array.isArray(seriesItem.media_types) ? seriesItem.media_types.join(', ') : '');
+            this.setFormValue('ombStatuteRefs', Array.isArray(seriesItem.omb_or_statute_refs) ? seriesItem.omb_or_statute_refs.join(', ') : '');
+            this.setFormValue('relatedSeries', Array.isArray(seriesItem.related_series) ? seriesItem.related_series.join(', ') : '');
+
+            // Populate ui_extras fields
+            if (seriesItem.ui_extras) {
+                Object.keys(seriesItem.ui_extras).forEach(key => {
+                    this.setFormValue(key, seriesItem.ui_extras[key]);
+                });
+            }
+
+        } catch (error) {
+            ErrorHandler.log(error, 'Populate forms from series');
+        }
+    }
+
+    // Helper to safely set form field values
+    setFormValue(fieldId, value) {
+        const field = document.getElementById(fieldId);
+        if (field && value !== null && value !== undefined) {
+            field.value = value;
+        }
+    }
+
+    // Update status bar and import modal counts
+    async refreshCountsUI() {
+        try {
+            const totalSeries = await this.getSeriesItemsCount();
+            const nonBlank = await this.getAllSeries();
+            const scheduleNumbers = nonBlank
+                .map(s => s.schedule_number)
+                .filter(n => n && n.trim() !== '')
+                .map(n => n.trim());
+            const totalSchedules = new Set(scheduleNumbers).size;
+
+            const recordCountElement = document.getElementById('recordCount');
+            if (recordCountElement) {
+                recordCountElement.textContent = `${totalSchedules} schedules, ${totalSeries} series`;
+            }
+
+            // Also update import modal fields if they exist
+            const importSchedulesCount = document.getElementById('importSchedulesCount');
+            const importSeriesCount = document.getElementById('importSeriesCount');
+            if (importSchedulesCount) importSchedulesCount.textContent = totalSchedules;
+            if (importSeriesCount) importSeriesCount.textContent = totalSeries;
+
+        } catch (error) {
+            ErrorHandler.log(error, 'Refresh counts UI');
+        }
+    }
+
+    // Validation functions
+    validateScheduleNumber(scheduleNumber) {
+        if (!scheduleNumber) return true; // Optional field
+        return /^\d{2}-\d{3}$/.test(scheduleNumber);
+    }
+
+    validateItemNumber(itemNumber) {
+        if (!itemNumber) return true; // Optional field
+        return /^\d+([A-Za-z]|\.\d+)?$/.test(itemNumber);
+    }
+
+    // v3.1 Import upsert method
+    async upsertSeriesV31(importItem) {
+        try {
+            // Normalize arrays from import data
+            const normalizeArray = (value) => {
+                if (Array.isArray(value)) return value;
+                if (!value) return [];
+                return String(value).split(/[,;\n]/).map(s => s.trim()).filter(Boolean);
+            };
+
+            // Prepare the series record
+            const now = new Date().toISOString();
+            const seriesRecord = {
+                schedule_number: importItem.schedule_number || null,
+                item_number: importItem.item_number || null,
+                record_series_title: importItem.record_series_title || null,
+                division: importItem.division || null,
+                approval_status: importItem.approval_status || null,
+                approval_date: importItem.approval_date || null,
+                dates_covered_start: importItem.dates_covered_start || null,
+                dates_covered_end: importItem.dates_covered_end || null,
+                tags: normalizeArray(importItem.tags),
+                media_types: normalizeArray(importItem.media_types),
+                omb_or_statute_refs: normalizeArray(importItem.omb_or_statute_refs),
+                related_series: normalizeArray(importItem.related_series),
+                retention_text: importItem.retention_text || null,
+                notes: importItem.notes || null,
+                ui_extras: importItem.ui_extras || {},
+                updated_at: now
+            };
+
+            // Preserve timestamps if they exist
+            if (importItem.created_at) {
+                seriesRecord.created_at = importItem.created_at;
+            }
+            if (importItem.version) {
+                seriesRecord.version = importItem.version;
+            }
+
+            // Upsert logic: find existing by [schedule_number+item_number] when both present
+            let existing = null;
+            if (seriesRecord.schedule_number && seriesRecord.item_number) {
+                existing = await this.findSeriesByScheduleAndItem(seriesRecord.schedule_number, seriesRecord.item_number);
+            }
+
+            if (existing) {
+                // Update existing record
+                seriesRecord._id = existing._id;
+                seriesRecord.created_at = existing.created_at || now;
+                seriesRecord.version = (existing.version || 0) + 1;
+                const updatedSeries = await this.saveSeries(seriesRecord, true);
+                return { action: 'updated', record: updatedSeries };
+            } else {
+                // Create new record
+                seriesRecord.created_at = now;
+                seriesRecord.version = 1;
+                const newSeries = await this.saveSeries(seriesRecord, false);
+                return { action: 'created', record: newSeries };
+            }
+
+        } catch (error) {
+            throw new Error(`Failed to upsert series: ${error.message}`);
+        }
     }
 }
 

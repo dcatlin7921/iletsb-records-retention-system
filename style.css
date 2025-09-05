@@ -1122,36 +1122,6 @@ select.form-control {
   box-shadow: 0 0 0 2px rgba(var(--color-red-500-rgb), 0.1);
 }
 
-.csv-modal {
-  max-width: 800px;
-  max-height: 80vh;
-  overflow-y: auto;
-}
-
-.csv-preview {
-  margin: var(--space-16) 0;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-base);
-  overflow-x: auto;
-}
-
-.csv-preview table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--font-size-sm);
-}
-
-.csv-preview th,
-.csv-preview td {
-  padding: var(--space-8);
-  border-bottom: 1px solid var(--color-border);
-  text-align: left;
-}
-
-.csv-preview th {
-  background: var(--color-surface);
-  font-weight: var(--font-weight-semibold);
-}
 
 .column-mapping {
   display: grid;
@@ -1529,91 +1499,6 @@ select.form-control {
   font-weight: var(--font-weight-medium);
 }
 
-/* CSV Import Modal */
-.csv-modal {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0, 0, 0, 0.5);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-}
-
-.csv-modal.hidden {
-    display: none;
-}
-
-.csv-modal-content {
-    background: var(--bg-primary);
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    padding: 24px;
-    max-width: 90%;
-    max-height: 90%;
-    overflow-y: auto;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-}
-
-.csv-modal h3 {
-    margin: 0 0 16px 0;
-    color: var(--text-primary);
-}
-
-.csv-preview {
-    margin: 16px 0;
-    max-height: 200px;
-    overflow: auto;
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-}
-
-.csv-preview table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
-}
-
-.csv-preview th,
-.csv-preview td {
-    padding: 8px;
-    border: 1px solid var(--border-color);
-    text-align: left;
-}
-
-.csv-preview th {
-    background: var(--bg-secondary);
-    font-weight: 600;
-}
-
-.column-mapping {
-    margin: 16px 0;
-    max-height: 300px;
-    overflow-y: auto;
-}
-
-.mapping-group {
-    margin-bottom: 12px;
-}
-
-.mapping-group label {
-    display: block;
-    margin-bottom: 4px;
-    font-weight: 500;
-    color: var(--text-primary);
-}
-
-.csv-modal-actions {
-    display: flex;
-    gap: 12px;
-    justify-content: flex-end;
-    margin-top: 24px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border-color);
-}
 
 /* Quality Control Indicators */
 .quality-indicators {
@@ -1883,9 +1768,6 @@ select.form-control {
         margin: 5vh auto;
     }
     
-    .csv-modal {
-        padding: var(--space-12);
-    }
     
     .column-mapping {
         grid-template-columns: 1fr;
