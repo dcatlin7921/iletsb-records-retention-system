@@ -193,9 +193,15 @@
                     <!-- Series Tab Panel -->
                     <div id="seriesTabPanel" class="tab-panel hidden" role="tabpanel" aria-labelledby="seriesTab">
                         <form class="detail-form" id="seriesForm">
-                            <div class="form-group">
-                                <label for="itemNumber" class="form-label">Series Number</label>
-                                <input type="text" id="itemNumber" class="form-control" placeholder="e.g., 100.01" required>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="seriesScheduleNumber" class="form-label">Schedule Number</label>
+                                    <input type="text" id="seriesScheduleNumber" class="form-control" placeholder="e.g., 25-012">
+                                </div>
+                                <div class="form-group">
+                                    <label for="itemNumber" class="form-label">Series Number</label>
+                                    <input type="text" id="itemNumber" class="form-control" placeholder="e.g., 100.01" required>
+                                </div>
                             </div>
 
                             <div class="form-group">
@@ -374,6 +380,7 @@
 
                             <div class="form-actions">
                                 <button type="submit" class="btn btn--primary">Save Series Item</button>
+                                <button type="button" class="btn btn--secondary" id="saveAsNewBtn">Save as New Records Category</button>
                                 <button type="button" class="btn btn--outline" id="cancelSeriesBtn">Cancel</button>
                                 <button type="button" class="btn btn--outline delete-btn hidden" id="deleteSeriesBtn">Delete</button>
                             </div>
@@ -382,10 +389,13 @@
 
                     <!-- Schedule Tab Panel -->
                     <div id="scheduleTabPanel" class="tab-panel hidden" role="tabpanel" aria-labelledby="scheduleTab">
+                        <div class="schedule-info-banner">
+                            <p><strong>Note:</strong> Changes made here will update all series records that share this schedule number.</p>
+                        </div>
                         <form class="detail-form" id="scheduleForm">
                             <div class="form-group">
-                                <label for="scheduleNum" class="form-label">Schedule Number</label>
-                                <input type="text" id="scheduleNum" class="form-control" placeholder="e.g., 19-022">
+                                <label class="form-label">Schedule Number</label>
+                                <div class="form-control-static" id="scheduleNum">Not assigned</div>
                             </div>
 
                             <div class="form-group">

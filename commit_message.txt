@@ -1,0 +1,20 @@
+feat: Major Refactor and UI Overhaul
+
+This commit introduces a significant architectural refactor and a complete user interface overhaul to improve the application's performance, maintainability, and user experience.
+
+Key changes include:
+
+- **Data Model Refactoring**: Merged the `schedules` and `series_items` tables into a single `series` table to simplify the data model and align with business logic. Renamed `application_number` to `schedule_number` for consistency.
+
+- **Enhanced Search and Filtering**: Rebuilt the search and filtering system to use IndexedDB indexes for faster performance. The new system supports multi-term text search and advanced filtering by date ranges, tags, and retention categories.
+
+- **UI/UX Overhaul**: Redesigned the entire user interface with a modern aesthetic, including:
+  - Light and dark mode support.
+  - Improved layout and responsiveness.
+  - Enhanced accessibility with ARIA attributes.
+
+- **Code Quality**: Improved code quality and maintainability by:
+  - Introducing utility classes for error handling, input sanitization, and DOM manipulation.
+  - Adding a `function_review.txt` file to streamline the code review process.
+
+- **Database Migration**: Implemented a database migration strategy to ensure a seamless transition for existing users to the new data model (v4).

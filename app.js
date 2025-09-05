@@ -475,6 +475,29 @@ class ILETSBApp {
         });
     }
 
+    async getAllAuditEvents() {
+        return new Promise((resolve, reject) => {
+            if (!this.db) {
+                console.error('Database not initialized');
+                resolve([]);
+                return;
+            }
+            
+            const transaction = this.db.transaction(['audit_events'], 'readonly');
+            const store = transaction.objectStore('audit_events');
+            const request = store.getAll();
+            
+            request.onsuccess = () => {
+                const result = request.result || [];
+                resolve(result);
+            };
+            request.onerror = () => {
+                console.error('getAllAuditEvents error:', request.error);
+                reject(request.error);
+            };
+        });
+    }
+
     // Modern Search and Filtering System
     async searchAndFilterSeries(searchCriteria = {}) {
         return new Promise((resolve, reject) => {
@@ -701,6 +724,9 @@ class ILETSBApp {
         } else {
             console.error('seriesForm element not found during event listener setup');
         }
+        
+        // Save as New button
+        document.getElementById('saveAsNewBtn').addEventListener('click', (e) => this.handleSaveAsNew(e));
         
         document.getElementById('cancelScheduleBtn').addEventListener('click', () => this.cancelScheduleEdit());
         document.getElementById('cancelSeriesBtn').addEventListener('click', () => this.cancelSeriesEdit());
@@ -1414,6 +1440,7 @@ class ILETSBApp {
 
     populateSeriesForm(item) {
         const fields = {
+            'seriesScheduleNumber': item.schedule_number || '',
             'itemNumber': item.item_number || '',
             'seriesTitle': item.record_series_title || '',
             'seriesDescription': item.ui_extras?.seriesDescription || '',
@@ -1467,8 +1494,13 @@ class ILETSBApp {
     }
 
     populateScheduleForm(schedule) {
+        // Set the schedule number display (read-only)
+        const scheduleNumDisplay = document.getElementById('scheduleNum');
+        if (scheduleNumDisplay) {
+            scheduleNumDisplay.textContent = schedule.schedule_number || 'Not assigned';
+        }
+
         const fields = {
-            'scheduleNum': schedule.schedule_number || '',
             'approvalStatus': schedule.approval_status || 'draft',
             'approvalDate': schedule.approval_date || '',
             'scheduleDivision': schedule.division || '',
@@ -1538,7 +1570,7 @@ class ILETSBApp {
         e.preventDefault();
         
         const schedule = {
-            schedule_number: document.getElementById('scheduleNum').value,
+            schedule_number: document.getElementById('scheduleNum').textContent,
             approval_status: document.getElementById('approvalStatus').value.toLowerCase(),
             approval_date: document.getElementById('approvalDate').value,
             division: document.getElementById('scheduleDivision').value,
@@ -1549,6 +1581,10 @@ class ILETSBApp {
         };
 
         try {
+            // Count how many series records will be affected
+            const allSeries = await this.getAllSeries();
+            const affectedCount = allSeries.filter(s => s.schedule_number === schedule.schedule_number).length;
+            
             if (this.currentSchedule) {
                 schedule._id = this.currentSchedule._id;
                 schedule.version = (this.currentSchedule.version || 1) + 1;
@@ -1557,12 +1593,57 @@ class ILETSBApp {
                 await this.saveSchedule(schedule);
             }
             
-            this.setStatus('Schedule saved successfully', 'success');
+            // Provide feedback about bulk update
+            const message = affectedCount > 1 
+                ? `Schedule saved successfully. Updated ${affectedCount} series records.`
+                : 'Schedule saved successfully';
+            this.setStatus(message, 'success');
+            
             await this.updateUI();
             this.cancelScheduleEdit();
         } catch (error) {
             ErrorHandler.log(error, 'Schedule save', APP_CONSTANTS.ERROR_TYPES.DATABASE);
             this.setStatus('Error saving schedule: ' + error.message, 'error');
+        }
+    }
+
+    async handleSaveAsNew(e) {
+        e.preventDefault();
+        
+        // Basic validation
+        const seriesTitleEl = document.getElementById('seriesTitle');
+        if (!seriesTitleEl || !seriesTitleEl.value.trim()) {
+            this.setStatus('Record Series Title is required', 'error');
+            return;
+        }
+
+        // Validate schedule number format if provided
+        const scheduleNumEl = document.getElementById('seriesScheduleNumber');
+        if (scheduleNumEl && scheduleNumEl.value.trim()) {
+            if (!this.validateScheduleNumber(scheduleNumEl.value.trim())) {
+                this.setStatus('Schedule Number must be in format ##-### (e.g., 25-001)', 'error');
+                return;
+            }
+        }
+
+        // Validate item number format if provided
+        const itemNumberEl = document.getElementById('itemNumber');
+        if (itemNumberEl && itemNumberEl.value.trim()) {
+            if (!this.validateItemNumber(itemNumberEl.value.trim())) {
+                this.setStatus('Item Number format is invalid', 'error');
+                return;
+            }
+        }
+
+        try {
+            // Save as new record (ignore currentSeriesItem)
+            await this.saveSeriesAsNew();
+            this.cancelSeriesEdit();
+            // Force refresh after form is closed
+            setTimeout(() => this.applyFilters(), 100);
+        } catch (error) {
+            ErrorHandler.log(error, 'Save series as new', APP_CONSTANTS.ERROR_TYPES.DATABASE);
+            this.setStatus('Error saving new series: ' + error.message, 'error');
         }
     }
 
@@ -1577,7 +1658,7 @@ class ILETSBApp {
         }
 
         // Validate schedule number format if provided
-        const scheduleNumEl = document.getElementById('scheduleNum');
+        const scheduleNumEl = document.getElementById('seriesScheduleNumber');
         if (scheduleNumEl && scheduleNumEl.value.trim()) {
             if (!this.validateScheduleNumber(scheduleNumEl.value.trim())) {
                 this.setStatus('Schedule Number must be in format ##-### (e.g., 25-001)', 'error');
@@ -2660,8 +2741,8 @@ class ILETSBApp {
     // Collect all form values and save as series record
     async saveSeriesFromForms() {
         try {
-            // Read schedule number from Series Details tab dropdown
-            const schedule_number = document.getElementById('seriesScheduleNum')?.value?.trim() || null;
+            // Read schedule number from Series Details tab input
+            const schedule_number = document.getElementById('seriesScheduleNumber')?.value?.trim() || null;
             const approval_status = document.getElementById('approvalStatus')?.value || null;
             const approval_date = document.getElementById('approvalDate')?.value || null;
             const division = document.getElementById('scheduleDivision')?.value?.trim() || null;
@@ -2712,18 +2793,16 @@ class ILETSBApp {
                 updated_at: now
             };
 
-            // Upsert by [schedule_number+item_number] when both present
-            const existing = (schedule_number && item_number)
-                ? await this.findSeriesByScheduleAndItem(schedule_number, item_number)
-                : null;
-
-            if (existing) {
-                row._id = existing._id;
-                row.created_at = existing.created_at || now;
-                row.version = (existing.version || 0) + 1;
+            // Check if we're updating an existing record
+            if (this.currentSeriesItem && this.currentSeriesItem._id) {
+                // Update existing record
+                row._id = this.currentSeriesItem._id;
+                row.created_at = this.currentSeriesItem.created_at || now;
+                row.version = (this.currentSeriesItem.version || 0) + 1;
                 await this.saveSeries(row, true);
                 await this.logAuditEvent('series', row._id, 'update', row);
             } else {
+                // Create new record
                 row.created_at = now;
                 row.version = 1;
                 const savedItem = await this.saveSeries(row, false);
@@ -2753,6 +2832,78 @@ class ILETSBApp {
         });
     }
 
+    // Save series as new record (always creates new, never updates)
+    async saveSeriesAsNew() {
+        try {
+            // Read schedule number from Series Details tab input
+            const schedule_number = document.getElementById('seriesScheduleNumber')?.value?.trim() || null;
+            const approval_status = document.getElementById('approvalStatus')?.value || null;
+            const approval_date = document.getElementById('approvalDate')?.value || null;
+            const division = document.getElementById('scheduleDivision')?.value?.trim() || null;
+            const tags = this.toArr(document.getElementById('scheduleTags')?.value);
+
+            // Read Series Details
+            const item_number = document.getElementById('itemNumber')?.value?.trim() || null;
+            const record_series_title = document.getElementById('seriesTitle')?.value?.trim() || null;
+            const dates_covered_start = document.getElementById('datesStart')?.value?.trim() || null;
+            const dates_covered_end = document.getElementById('datesEnd')?.value?.trim() || null;
+            const retention_text = document.getElementById('retentionText')?.value || null;
+            const notes = document.getElementById('seriesNotes')?.value || null;
+
+            const media_types = this.toArr(document.getElementById('mediaTypes')?.value);
+            const omb_or_statute_refs = this.toArr(document.getElementById('ombStatuteRefs')?.value);
+            const related_series = this.toArr(document.getElementById('relatedSeries')?.value);
+
+            // Everything else goes into ui_extras (captured verbatim)
+            const ui_extras = {
+                seriesDescription: document.getElementById('seriesDescription')?.value || null,
+                seriesContact: document.getElementById('seriesContact')?.value || null,
+                seriesLocation: document.getElementById('seriesLocation')?.value || null,
+                retentionTerm: document.getElementById('retentionTerm')?.value || null,
+                retentionTrigger: document.getElementById('retentionTrigger')?.value || null,
+                volumePaper: document.getElementById('volumePaper')?.value || null,
+                volumeElectronic: document.getElementById('volumeElectronic')?.value || null,
+                annualPaper: document.getElementById('annualPaper')?.value || null,
+                annualElectronic: document.getElementById('annualElectronic')?.value || null,
+                arrangement: document.getElementById('arrangement')?.value || null,
+                electronicStandard: document.getElementById('electronicStandard')?.value || null,
+                numberSizeFiles: document.getElementById('numberSizeFiles')?.value || null,
+                indexFindingAids: document.getElementById('indexFindingAids')?.value || null,
+                representativeName: document.getElementById('representativeName')?.value || null,
+                representativeTitle: document.getElementById('representativeTitle')?.value || null,
+                representativePhone: document.getElementById('representativePhone')?.value || null,
+                recordsOfficerName: document.getElementById('recordsOfficerName')?.value || null,
+                recordsOfficerPhone: document.getElementById('recordsOfficerPhone')?.value || null,
+                scheduleNotes: document.getElementById('scheduleNotes')?.value || null
+            };
+
+            const now = new Date().toISOString();
+            const row = {
+                schedule_number, item_number, record_series_title,
+                division, approval_status, approval_date,
+                dates_covered_start, dates_covered_end,
+                tags, media_types, omb_or_statute_refs, related_series,
+                retention_text, notes, ui_extras,
+                created_at: now,
+                updated_at: now,
+                version: 1
+            };
+
+            // Always create new record
+            const savedItem = await this.saveSeries(row, false);
+            await this.logAuditEvent('series', savedItem._id, 'create', row);
+
+            // Refresh UI
+            await this.updateUI();
+            this.setStatus('New series record created successfully', 'success');
+            
+        } catch (error) {
+            ErrorHandler.log(error, 'Save series as new');
+            this.setStatus('Error creating new series: ' + error.message, 'error');
+            throw error;
+        }
+    }
+
     // Load series data into forms (reverse mapping)
     populateFormsFromSeries(seriesItem) {
         if (!seriesItem) return;
@@ -2766,6 +2917,7 @@ class ILETSBApp {
             this.setFormValue('scheduleTags', Array.isArray(seriesItem.tags) ? seriesItem.tags.join(', ') : '');
 
             // Populate Series Details
+            this.setFormValue('seriesScheduleNumber', seriesItem.schedule_number);
             this.setFormValue('itemNumber', seriesItem.item_number);
             this.setFormValue('seriesTitle', seriesItem.record_series_title);
             this.setFormValue('datesStart', seriesItem.dates_covered_start);
