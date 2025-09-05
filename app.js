@@ -358,24 +358,99 @@ class ILETSBApp {
     }
 
     async saveSchedule(schedule, isUpdate = false) {
-        // Legacy method - now updates all series with matching schedule_number
+        // Atomic bulk update for all series with matching schedule_number
         const series = await this.getAllSeries();
         const matchingSeries = series.filter(s => s.schedule_number === schedule.schedule_number);
         
-        const promises = matchingSeries.map(seriesItem => {
-            // Update schedule fields on the series item
-            seriesItem.schedule_number = schedule.schedule_number;
-            seriesItem.approval_status = schedule.approval_status;
-            seriesItem.approval_date = schedule.approval_date;
-            seriesItem.division = schedule.division || seriesItem.division;
-            seriesItem.notes = schedule.notes;
-            seriesItem.tags = schedule.tags || seriesItem.tags;
-            
-            return this.saveSeries(seriesItem, true);
-        });
+        if (matchingSeries.length === 0) {
+            return schedule; // No series to update
+        }
         
-        await Promise.all(promises);
-        return schedule;
+        // Use atomic transaction for bulk update
+        return this.performAtomicScheduleBulkUpdate(schedule, matchingSeries, isUpdate);
+    }
+    
+    async performAtomicScheduleBulkUpdate(schedule, matchingSeries, isUpdate) {
+        return new Promise((resolve, reject) => {
+            // Start atomic transaction
+            const transaction = this.db.transaction(['series', 'audit_events'], 'readwrite');
+            const seriesStore = transaction.objectStore('series');
+            const auditStore = transaction.objectStore('audit_events');
+            
+            const now = new Date().toISOString();
+            const updatedSeries = [];
+            const auditEvents = [];
+            
+            // Prepare all updates and audit events
+            matchingSeries.forEach(seriesItem => {
+                // Update schedule fields on the series item
+                const updatedItem = { ...seriesItem };
+                updatedItem.schedule_number = schedule.schedule_number;
+                updatedItem.approval_status = schedule.approval_status;
+                updatedItem.approval_date = schedule.approval_date;
+                updatedItem.division = schedule.division || seriesItem.division;
+                updatedItem.notes = schedule.notes;
+                updatedItem.tags = schedule.tags || seriesItem.tags;
+                updatedItem.updated_at = now;
+                
+                updatedSeries.push(updatedItem);
+                
+                // Prepare audit event for this series
+                auditEvents.push({
+                    entity: 'series',
+                    entity_id: seriesItem._id,
+                    action: 'schedule_bulk_update',
+                    actor: 'local-user',
+                    at: now,
+                    payload: JSON.stringify({
+                        schedule_number: schedule.schedule_number,
+                        item_number: seriesItem.item_number,
+                        record_series_title: seriesItem.record_series_title,
+                        bulk_update_fields: ['approval_status', 'approval_date', 'division', 'notes', 'tags']
+                    })
+                });
+            });
+            
+            // Transaction success handler
+            transaction.oncomplete = () => {
+                resolve(schedule);
+            };
+            
+            // Transaction error handler - automatic rollback
+            transaction.onerror = (event) => {
+                const error = new Error(`Bulk update transaction failed: ${event.target.error?.message || 'Unknown error'}`);
+                ErrorHandler.log(error, 'Schedule bulk update transaction');
+                reject(error);
+            };
+            
+            transaction.onabort = (event) => {
+                const error = new Error(`Bulk update transaction aborted: ${event.target.error?.message || 'Transaction aborted'}`);
+                ErrorHandler.log(error, 'Schedule bulk update transaction abort');
+                reject(error);
+            };
+            
+            try {
+                // Perform all series updates within the transaction
+                updatedSeries.forEach(item => {
+                    const request = seriesStore.put(item);
+                    request.onerror = () => {
+                        transaction.abort();
+                    };
+                });
+                
+                // Add all audit events within the same transaction
+                auditEvents.forEach(event => {
+                    const request = auditStore.add(event);
+                    request.onerror = () => {
+                        transaction.abort();
+                    };
+                });
+                
+            } catch (error) {
+                ErrorHandler.log(error, 'Schedule bulk update execution');
+                transaction.abort();
+            }
+        });
     }
 
     async saveSeriesItem(item, isUpdate = false) {
@@ -443,15 +518,39 @@ class ILETSBApp {
 
     async deleteSeries(id) {
         return new Promise((resolve, reject) => {
+            if (!this.db) {
+                ErrorHandler.log(new Error('Database not initialized'), 'Delete series');
+                return reject(new Error('Database connection not available'));
+            }
+            
             const transaction = this.db.transaction(['series'], 'readwrite');
             const store = transaction.objectStore('series');
             const request = store.delete(id);
-            
+
             request.onsuccess = () => {
                 this.logAuditEvent('series', id, 'delete', {});
                 resolve();
             };
-            request.onerror = () => reject(request.error);
+            
+            request.onerror = (event) => {
+                const error = request.error || new Error('Failed to delete series record');
+                ErrorHandler.log(error, 'Delete series', {
+                    id: id,
+                    errorName: error.name,
+                    errorMessage: error.message
+                });
+                reject(error);
+            };
+            
+            transaction.onabort = (event) => {
+                const error = transaction.error || new Error('Transaction aborted during delete');
+                ErrorHandler.log(error, 'Delete series transaction', {
+                    id: id,
+                    errorName: error.name,
+                    errorMessage: error.message
+                });
+                reject(error);
+            };
         });
     }
 
@@ -680,6 +779,55 @@ class ILETSBApp {
         }
         
         return true;
+    }
+
+    // Bulk Update UI Feedback Methods
+    showBulkUpdateProgress(recordCount) {
+        // Disable form submission during bulk update
+        const submitBtn = document.querySelector('#scheduleForm button[type="submit"]');
+        const cancelBtn = document.getElementById('cancelScheduleBtn');
+        
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = `
+                <span class="loading-spinner"></span>
+                Updating ${recordCount} records...
+            `;
+        }
+        
+        if (cancelBtn) {
+            cancelBtn.disabled = true;
+        }
+        
+        // Show progress indicator in status bar
+        this.setStatus(`Bulk update in progress: updating ${recordCount} series records...`, 'info');
+        
+        // Add loading class to form for visual feedback
+        const form = document.getElementById('scheduleForm');
+        if (form) {
+            form.classList.add('bulk-updating');
+        }
+    }
+    
+    hideBulkUpdateProgress() {
+        // Re-enable form controls
+        const submitBtn = document.querySelector('#scheduleForm button[type="submit"]');
+        const cancelBtn = document.getElementById('cancelScheduleBtn');
+        
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = 'Save Schedule';
+        }
+        
+        if (cancelBtn) {
+            cancelBtn.disabled = false;
+        }
+        
+        // Remove loading class from form
+        const form = document.getElementById('scheduleForm');
+        if (form) {
+            form.classList.remove('bulk-updating');
+        }
     }
 
     // UI Event Handlers
@@ -1580,11 +1728,16 @@ class ILETSBApp {
                 : []
         };
 
+        // Count how many series records will be affected
+        const allSeries = await this.getAllSeries();
+        const affectedCount = allSeries.filter(s => s.schedule_number === schedule.schedule_number).length;
+        
+        // Show loading state for bulk updates
+        if (affectedCount > 1) {
+            this.showBulkUpdateProgress(affectedCount);
+        }
+        
         try {
-            // Count how many series records will be affected
-            const allSeries = await this.getAllSeries();
-            const affectedCount = allSeries.filter(s => s.schedule_number === schedule.schedule_number).length;
-            
             if (this.currentSchedule) {
                 schedule._id = this.currentSchedule._id;
                 schedule.version = (this.currentSchedule.version || 1) + 1;
@@ -1599,10 +1752,13 @@ class ILETSBApp {
                 : 'Schedule saved successfully';
             this.setStatus(message, 'success');
             
+            // Hide loading state and refresh UI
+            this.hideBulkUpdateProgress();
             await this.updateUI();
             this.cancelScheduleEdit();
         } catch (error) {
             ErrorHandler.log(error, 'Schedule save', APP_CONSTANTS.ERROR_TYPES.DATABASE);
+            this.hideBulkUpdateProgress();
             this.setStatus('Error saving schedule: ' + error.message, 'error');
         }
     }
@@ -2643,6 +2799,56 @@ class ILETSBApp {
             this.modalCallbacks.onCancel();
         }
         this.hideModal();
+    }
+
+    confirmDeleteSchedule() {
+        const scheduleNumber = document.getElementById('seriesScheduleNumber')?.value?.trim();
+        if (!scheduleNumber) {
+            this.setStatus('No schedule selected for deletion', 'error');
+            return;
+        }
+        
+        this.showModal(
+            'Delete Schedule Assignment',
+            `This will remove the schedule assignment "${scheduleNumber}" from all associated series records. This action cannot be undone. Are you sure you want to continue?`,
+            async () => {
+                try {
+                    await this.deleteSchedule(`sched_${scheduleNumber}`);
+                    this.setStatus('Schedule assignment removed successfully', 'success');
+                    this.cancelSeriesEdit();
+                    this.updateUI();
+                } catch (error) {
+                    ErrorHandler.log(error, 'Delete schedule assignment');
+                    this.setStatus('Failed to remove schedule assignment', 'error');
+                }
+            }
+        );
+    }
+
+    confirmDeleteSeriesItem() {
+        const selectedId = this.selectedItemId;
+        if (!selectedId) {
+            this.setStatus('No series record selected for deletion', 'error');
+            return;
+        }
+        
+        const seriesTitle = document.getElementById('recordSeriesTitle')?.value?.trim() || 'this series record';
+        
+        this.showModal(
+            'Delete Series Record',
+            `This will permanently delete "${seriesTitle}". This action cannot be undone. Are you sure you want to continue?`,
+            async () => {
+                try {
+                    await this.deleteSeries(selectedId);
+                    this.setStatus('Series record deleted successfully', 'success');
+                    this.cancelSeriesEdit();
+                    this.updateUI();
+                } catch (error) {
+                    ErrorHandler.log(error, 'Delete series record');
+                    this.setStatus('Failed to delete series record', 'error');
+                }
+            }
+        );
     }
 
     async clearDatabase() {

@@ -9,7 +9,8 @@ trigger: always_on
 - Use **IndexedDB** (Dexie recommended).
 
 ## 2) Data Model (relationships)
-- **Single `series` table** containing all record series with optional **Schedule** assignment fields.
+- **Data is stored in a single `series` table** containing all record series with optional **Schedule** assignment fields.
+- **For user convenience, the UI may present a "Schedule View" that allows for editing schedule-related fields (`approval_status`, `approval_date`, etc.) in one place. Actions taken in this view MUST apply the changes to all series records sharing the same `schedule_number` within a single database transaction.**
 - AuditEvents reference: `entity = "series"`, `entity_id` = target `_id`.
 
 ## 3) Keys & Uniqueness
@@ -25,17 +26,18 @@ trigger: always_on
 - Arrays are **arrays** (not semicolon strings): `tags[]`, `media_types[]`, `omb_or_statute_refs[]`, `related_series[]`.
 - Numbers non-negative; bytes are integers.
 
-## 5) Retention (text only)
-- Capture **only** `retention_text` as entered by users.
-- Do **not** store a structured `retention` object; do **not** derive `retention_is_permanent`.
+## 5) Retention
+- **The primary field for retention is `retention_text`.**
+- **To support data entry, the following optional, structured fields may also be captured: `retention_term` (number) and `retention_trigger` (string).**
+- **The application MUST NOT derive a retention status (e.g. "permanent") from these fields for display or filtering.**
 
 ## 6) Validation (save + import)
 - Require: `record_series_title` only.
-- `schedule_number` (when present) must match `^\d{2}-\d{3}$`.
-- `item_number` (when present) should match `^\d+([A-Za-z]|\.\d+)?$`.
+- `schedule_number` (when present) must match `^\d{2}-\d{3}`.
+- `item_number` (when present) should match `^\d+([A-Za-z]|\.\d+)?`.
 
 ## 7) Import / Export
-- **Export:** include `series`, `audit_events`, metadata. No separate schedules array.
+- **Export:** include `series`, `audit_events`, metadata. No separate schedules array. The export should be a full dump of the database.
 - **Import (upsert):**
   1) Upsert series by **`[schedule_number + item_number]`** when both present.
   2) For series without schedule assignment, use other natural keys or create new.
@@ -47,7 +49,8 @@ trigger: always_on
 ## 8) UI Guardrails
 - When assigning **Schedule Number** to a series, validate `schedule_number` format.
 - Tags input (and other list-like text inputs) → split to arrays for storage.
-- No retention logic or derived flags in the UI; retain entered text as-is.
+- **The UI must not contain logic or flags derived from retention fields (e.g., "Permanent," "Time-Limited"). Retain and display entered data as-is.**
+- **The form shall include a "Clone Record" button. When clicked, this button will populate a new, unsaved form with the data from the currently selected record. It does not clear any fields and does not save the record automatically.**
 
 ## 9) Audit & Timestamps
 - On create/update/delete, write AuditEvent with: `entity = "series"`, `entity_id`, `action`, `actor`, `at`, and **`payload` as an object**.
@@ -55,7 +58,7 @@ trigger: always_on
 
 ## 10) Errors & Transactions
 - Show clear errors for: duplicate `[schedule_number+item_number]`, bad enums/dates.
-- Wrap multi-row imports in a **transaction**.
+- Wrap multi-row imports and any schedule-wide bulk updates in a **transaction**.
 
 ## 11) Minimal Indexes
 ```ts
