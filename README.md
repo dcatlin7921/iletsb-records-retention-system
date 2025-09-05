@@ -82,6 +82,14 @@ This project uses standard web technologies. There are no dependencies to instal
 -   **Validation**: All data validation rules are defined in the `RULES.md` file and implemented in the import and save logic.
 -   **Error Handling**: A global error handler logs issues to the browser's console and stores them in `localStorage` for debugging.
 
+## Development History
+
+This project began as a proof-of-concept in Perplexity Labs, where an initial version was generated from a simple prompt and an example PDF of a records schedule. The initial prototype demonstrated the viability of an offline-first, browser-based records management system.
+
+Following the successful proof-of-concept, the project was migrated to the Windsurf development environment for more advanced coding and refinement. The application has since been co-developed using a combination of AI coding assistants, including models from OpenAI (GPT series), Google (Gemini series), and Anthropic (Claude series), as well as specialized software engineering models.
+
+The project is under active development, with the data schema and application features continuously evolving to meet the specific needs of ILETSB.
+
 ## Browser Support
 
 The application is designed for modern web browsers that support:
@@ -91,4 +99,4 @@ The application is designed for modern web browsers that support:
 
 ## License
 
-Proprietary - Illinois Law Enforcement Training and Standards Board
+Proprietary
