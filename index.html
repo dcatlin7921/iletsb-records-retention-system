@@ -196,49 +196,49 @@
                             <div class="form-row">
                                 <div class="form-group">
                                     <label for="seriesScheduleNumber" class="form-label">Schedule Number</label>
-                                    <input type="text" id="seriesScheduleNumber" class="form-control" placeholder="e.g., 25-012">
+                                    <input type="text" id="seriesScheduleNumber" class="form-control" placeholder="e.g., 25-012" data-field="schedule_number">
                                 </div>
                                 <div class="form-group">
                                     <label for="itemNumber" class="form-label">Series Number</label>
-                                    <input type="text" id="itemNumber" class="form-control" placeholder="e.g., 100.01" required>
+                                    <input type="text" id="itemNumber" class="form-control" placeholder="e.g., 100.01" required data-field="item_number">
                                 </div>
                             </div>
 
                             <div class="form-group">
                                 <label for="seriesTitle" class="form-label">Record Series Title</label>
-                                <input type="text" id="seriesTitle" class="form-control" required>
+                                <input type="text" id="seriesTitle" class="form-control" required data-field="record_series_title">
                             </div>
 
                             <div class="form-group">
                                 <label for="seriesDescription" class="form-label">Description</label>
-                                <textarea id="seriesDescription" class="form-control" rows="3"></textarea>
+                                <textarea id="seriesDescription" class="form-control" rows="3" data-field="ui_extras.seriesDescription"></textarea>
                             </div>
 
                             <div class="form-row">
                                 <div class="form-group">
                                     <label for="datesStart" class="form-label">Dates Covered Start</label>
-                                    <input type="text" id="datesStart" class="form-control" placeholder="YYYY or YYYY-MM-DD">
+                                    <input type="text" id="datesStart" class="form-control" placeholder="YYYY or YYYY-MM-DD" data-field="dates_covered_start">
                                 </div>
                                 <div class="form-group">
                                     <label for="datesEnd" class="form-label">Dates Covered End</label>
-                                    <input type="text" id="datesEnd" class="form-control" placeholder="YYYY, YYYY-MM-DD, or 'present'">
+                                    <input type="text" id="datesEnd" class="form-control" placeholder="YYYY, YYYY-MM-DD, or 'present'" data-field="dates_covered_end">
                                 </div>
                             </div>
 
                             <div class="form-row">
                                 <div class="form-group">
                                     <label for="seriesDivision" class="form-label">Division</label>
-                                    <input type="text" id="seriesDivision" class="form-control">
+                                    <input type="text" id="seriesDivision" class="form-control" data-field="division">
                                 </div>
                                 <div class="form-group">
                                     <label for="seriesContact" class="form-label">Contact</label>
-                                    <input type="text" id="seriesContact" class="form-control">
+                                    <input type="text" id="seriesContact" class="form-control" data-field="ui_extras.seriesContact">
                                 </div>
                             </div>
 
                             <div class="form-group">
                                 <label for="seriesLocation" class="form-label">Location</label>
-                                <input type="text" id="seriesLocation" class="form-control">
+                                <input type="text" id="seriesLocation" class="form-control" data-field="ui_extras.seriesLocation">
                             </div>
 
                             <div class="retention-section">
@@ -246,17 +246,17 @@
                                 
                                 <div class="form-group" id="retentionTermGroup">
                                     <label for="retentionTerm" class="form-label">Retention Term (years)</label>
-                                    <input type="number" id="retentionTerm" class="form-control" min="0">
+                                    <input type="number" id="retentionTerm" class="form-control" min="0" data-field="ui_extras.retentionTerm">
                                 </div>
 
                                 <div class="form-group">
                                     <label for="retentionText" class="form-label">Retention Text</label>
-                                    <textarea id="retentionText" class="form-control" rows="2"></textarea>
+                                    <textarea id="retentionText" class="form-control" rows="2" data-field="retention_text"></textarea>
                                 </div>
 
                                 <div class="form-group">
                                     <label for="retentionTrigger" class="form-label">Retention Trigger</label>
-                                    <input type="text" id="retentionTrigger" class="form-control">
+                                    <input type="text" id="retentionTrigger" class="form-control" data-field="ui_extras.retentionTrigger">
                                 </div>
 
                                 <div class="checkbox-group">
@@ -269,11 +269,11 @@
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label for="volumePaper" class="form-label">Paper Volume (cu ft)</label>
-                                        <input type="text" id="volumePaper" class="form-control">
+                                        <input type="text" id="volumePaper" class="form-control" data-field="ui_extras.volumePaper">
                                     </div>
                                     <div class="form-group">
                                         <label for="volumeElectronic" class="form-label">Electronic Volume</label>
-                                        <input type="text" id="volumeElectronic" class="form-control">
+                                        <input type="text" id="volumeElectronic" class="form-control" data-field="ui_extras.volumeElectronic">
                                         <div class="byte-converter">
                                             <button type="button" class="converter-btn" data-unit="KB">KB</button>
                                             <button type="button" class="converter-btn" data-unit="MB">MB</button>
@@ -285,11 +285,11 @@
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label for="annualPaper" class="form-label">Annual Accum. Paper (cu ft)</label>
-                                        <input type="text" id="annualPaper" class="form-control">
+                                        <input type="text" id="annualPaper" class="form-control" data-field="ui_extras.annualPaper">
                                     </div>
                                     <div class="form-group">
                                         <label for="annualElectronic" class="form-label">Annual Accum. Electronic</label>
-                                        <input type="text" id="annualElectronic" class="form-control">
+                                        <input type="text" id="annualElectronic" class="form-control" data-field="ui_extras.annualElectronic">
                                         <div class="byte-converter">
                                             <button type="button" class="converter-btn" data-unit="KB">KB</button>
                                             <button type="button" class="converter-btn" data-unit="MB">MB</button>
@@ -304,42 +304,42 @@
                                 
                                 <div class="form-group">
                                     <label for="arrangement" class="form-label">Arrangement</label>
-                                    <input type="text" id="arrangement" class="form-control">
+                                    <input type="text" id="arrangement" class="form-control" data-field="ui_extras.arrangement">
                                 </div>
 
                                 <div class="form-group">
                                     <label for="mediaTypes" class="form-label">Media Types</label>
-                                    <input type="text" id="mediaTypes" class="form-control" placeholder="paper; electronic; multimedia">
+                                    <input type="text" id="mediaTypes" class="form-control" placeholder="paper; electronic; multimedia" data-field="media_types" data-array-input="true">
                                 </div>
 
                                 <div class="form-group">
                                     <label for="electronicStandard" class="form-label">Electronic Records Standard</label>
-                                    <input type="text" id="electronicStandard" class="form-control" placeholder="PDF/A, TIFF, etc.">
+                                    <input type="text" id="electronicStandard" class="form-control" placeholder="PDF/A, TIFF, etc." data-field="ui_extras.electronicStandard">
                                 </div>
 
                                 <div class="form-group">
                                     <label for="numberSizeFiles" class="form-label">Number/Size of Files</label>
-                                    <input type="text" id="numberSizeFiles" class="form-control">
+                                    <input type="text" id="numberSizeFiles" class="form-control" data-field="ui_extras.numberSizeFiles">
                                 </div>
 
                                 <div class="form-group">
                                     <label for="indexFindingAids" class="form-label">Index or Finding Aids</label>
-                                    <input type="text" id="indexFindingAids" class="form-control">
+                                    <input type="text" id="indexFindingAids" class="form-control" data-field="ui_extras.indexFindingAids">
                                 </div>
 
                                 <div class="form-group">
                                     <label for="ombStatuteRefs" class="form-label">OMB or Statute References</label>
-                                    <input type="text" id="ombStatuteRefs" class="form-control">
+                                    <input type="text" id="ombStatuteRefs" class="form-control" data-field="omb_or_statute_refs" data-array-input="true">
                                 </div>
 
                                 <div class="form-group">
                                     <label for="relatedSeries" class="form-label">Related Series</label>
-                                    <input type="text" id="relatedSeries" class="form-control">
+                                    <input type="text" id="relatedSeries" class="form-control" data-field="related_series" data-array-input="true">
                                 </div>
 
                                 <div class="form-group">
                                     <label for="seriesNotes" class="form-label">Series Notes</label>
-                                    <textarea id="seriesNotes" class="form-control" rows="2"></textarea>
+                                    <textarea id="seriesNotes" class="form-control" rows="2" data-field="notes"></textarea>
                                 </div>
                             </div>
 
@@ -349,17 +349,17 @@
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label for="representativeName" class="form-label">Representative Name</label>
-                                        <input type="text" id="representativeName" class="form-control">
+                                        <input type="text" id="representativeName" class="form-control" data-field="ui_extras.representativeName">
                                     </div>
                                     <div class="form-group">
                                         <label for="representativeTitle" class="form-label">Representative Title</label>
-                                        <input type="text" id="representativeTitle" class="form-control">
+                                        <input type="text" id="representativeTitle" class="form-control" data-field="ui_extras.representativeTitle">
                                     </div>
                                 </div>
 
                                 <div class="form-group">
                                     <label for="representativePhone" class="form-label">Representative Phone</label>
-                                    <input type="tel" id="representativePhone" class="form-control" placeholder="(555) 123-4567">
+                                    <input type="tel" id="representativePhone" class="form-control" placeholder="(555) 123-4567" data-field="ui_extras.representativePhone">
                                 </div>
                             </div>
 
@@ -369,11 +369,11 @@
                                 <div class="form-row">
                                     <div class="form-group">
                                         <label for="recordsOfficerName" class="form-label">Records Officer Name</label>
-                                        <input type="text" id="recordsOfficerName" class="form-control">
+                                        <input type="text" id="recordsOfficerName" class="form-control" data-field="ui_extras.recordsOfficerName">
                                     </div>
                                     <div class="form-group">
                                         <label for="recordsOfficerPhone" class="form-label">Records Officer Phone</label>
-                                        <input type="tel" id="recordsOfficerPhone" class="form-control" placeholder="(555) 123-4567">
+                                        <input type="tel" id="recordsOfficerPhone" class="form-control" placeholder="(555) 123-4567" data-field="ui_extras.recordsOfficerPhone">
                                     </div>
                                 </div>
                             </div>
@@ -381,6 +381,7 @@
                             <div class="form-actions">
                                 <button type="submit" class="btn btn--primary">Save Series Item</button>
                                 <button type="button" class="btn btn--secondary" id="saveAsNewBtn">Save as New Records Category</button>
+                                <button type="button" class="btn btn--secondary" id="cloneRecordBtn">Clone Record</button>
                                 <button type="button" class="btn btn--outline" id="cancelSeriesBtn">Cancel</button>
                                 <button type="button" class="btn btn--outline delete-btn hidden" id="deleteSeriesBtn">Delete</button>
                             </div>
@@ -400,7 +401,7 @@
 
                             <div class="form-group">
                                 <label for="approvalStatus" class="form-label">Approval Status</label>
-                                <select id="approvalStatus" class="form-control">
+                                <select id="approvalStatus" class="form-control" data-field="approval_status">
                                     <option value="draft">Draft</option>
                                     <option value="pending">Pending</option>
                                     <option value="approved">Approved</option>
@@ -416,22 +417,22 @@
 
                             <div class="form-group">
                                 <label for="approvalDate" class="form-label">Approval Date</label>
-                                <input type="date" id="approvalDate" class="form-control">
+                                <input type="date" id="approvalDate" class="form-control" data-field="approval_date">
                             </div>
 
                             <div class="form-group">
                                 <label for="scheduleDivision" class="form-label">Division</label>
-                                <input type="text" id="scheduleDivision" class="form-control">
+                                <input type="text" id="scheduleDivision" class="form-control" data-field="division">
                             </div>
 
                             <div class="form-group">
                                 <label for="scheduleTags" class="form-label">Tags</label>
-                                <input type="text" id="scheduleTags" class="form-control" placeholder="Separate with commas">
+                                <input type="text" id="scheduleTags" class="form-control" placeholder="Separate with commas" data-field="tags" data-array-input="true">
                             </div>
 
                             <div class="form-group">
                                 <label for="scheduleNotes" class="form-label">Notes</label>
-                                <textarea id="scheduleNotes" class="form-control" rows="2"></textarea>
+                                <textarea id="scheduleNotes" class="form-control" rows="2" data-field="notes"></textarea>
                             </div>
 
                             <div class="form-actions">

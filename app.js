@@ -150,6 +150,13 @@ class ILETSBApp {
     async init() {
         try {
             await this.initDatabase();
+            
+            // Check if database is empty and load test data if needed
+            const existingData = await this.getAllSeries();
+            if (existingData.length === 0) {
+                await this.loadTestDataIfEmpty();
+            }
+            
             this.initEventListeners();
             this.restoreSearchPaneState();
             this.updateUI();
@@ -157,6 +164,47 @@ class ILETSBApp {
         } catch (error) {
             ErrorHandler.log(error, 'App initialization');
             this.setStatus('Error initializing application: ' + error.message, 'error');
+        }
+    }
+    
+    async loadTestDataIfEmpty() {
+        try {
+            // Only attempt to load test data if running from http/https (not file://)
+            if (window.location.protocol === 'file:') {
+                // Skip test data loading when running from file system due to CORS restrictions
+                return;
+            }
+            
+            // Load test data from test-import.json
+            const response = await fetch('./test-import.json');
+            if (response.ok) {
+                const testData = await response.json();
+                if (testData.series && testData.series.length > 0) {
+                    // Import the test data
+                    for (const item of testData.series) {
+                        // Handle legacy application_number field
+                        if (item.application_number && !item.schedule_number) {
+                            item.schedule_number = item.application_number;
+                            delete item.application_number;
+                        }
+                        
+                        // Normalize arrays
+                        ['tags', 'media_types', 'omb_or_statute_refs', 'related_series'].forEach(field => {
+                            if (item[field] && typeof item[field] === 'string') {
+                                item[field] = item[field].split(/[,;\n]/).map(s => s.trim()).filter(Boolean);
+                            }
+                        });
+                        
+                        // Save to database
+                        await this.saveSeries(item, false);
+                    }
+                    
+                    this.setStatus('Test data loaded successfully', 'success');
+                }
+            }
+        } catch (error) {
+            // Silently handle test data loading errors - this is not critical functionality
+            console.log('Test data not loaded:', error.message);
         }
     }
 
@@ -838,13 +886,9 @@ class ILETSBApp {
             newScheduleBtn.addEventListener('click', () => this.createNewSchedule());
         }
         document.getElementById('newSeriesBtn').addEventListener('click', () => this.createNewSeriesItem());
-        document.getElementById('exportBtn').addEventListener('click', () => this.exportData());
-        document.getElementById('importBtn').addEventListener('click', (e) => {
-            e.preventDefault();
-            document.getElementById('importFile').click();
-        });
+        // Export and import buttons are handled in setupAdminMenu() to avoid duplicate listeners
         document.getElementById('importFile').addEventListener('change', (e) => this.importData(e));
-        document.getElementById('exportFilteredBtn').addEventListener('click', () => this.exportFilteredData());
+        // Export filtered button is handled in setupAdminMenu() to avoid duplicate listeners
 
         // Search and filters
         document.getElementById('searchInput').addEventListener('input', (e) => this.debounceSearch(e.target.value));
@@ -938,6 +982,660 @@ class ILETSBApp {
         document.addEventListener('click', (e) => this.handleGlobalClick(e));
     }
 
+    setupAdminMenu() {
+        const adminMenuBtn = document.getElementById('adminMenuBtn');
+        const adminDropdown = document.getElementById('adminDropdown');
+        const newSeriesBtn = document.getElementById('newSeriesBtn');
+        const exportBtn = document.getElementById('exportBtn');
+        const importBtn = document.getElementById('importBtn');
+        const exportFilteredBtn = document.getElementById('exportFilteredBtn');
+        const clearDbBtn = document.getElementById('clearDbBtn');
+
+        if (!adminMenuBtn || !adminDropdown) return;
+
+        // Toggle dropdown visibility
+        adminMenuBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isExpanded = adminMenuBtn.getAttribute('aria-expanded') === 'true';
+            
+            // Close all other dropdowns first
+            document.querySelectorAll('.dropdown').forEach(dropdown => {
+                if (dropdown !== adminDropdown) {
+                    dropdown.classList.add('hidden');
+                }
+            });
+            
+            // Toggle this dropdown
+            if (isExpanded) {
+                adminDropdown.classList.add('hidden');
+                adminMenuBtn.setAttribute('aria-expanded', 'false');
+            } else {
+                adminDropdown.classList.remove('hidden');
+                adminMenuBtn.setAttribute('aria-expanded', 'true');
+            }
+        });
+
+        // Admin menu item handlers
+        if (newSeriesBtn) {
+            newSeriesBtn.addEventListener('click', () => {
+                this.createNewSeriesItem();
+                adminDropdown.classList.add('hidden');
+                adminMenuBtn.setAttribute('aria-expanded', 'false');
+            });
+        }
+
+        if (exportBtn) {
+            exportBtn.addEventListener('click', () => {
+                this.exportData();
+                adminDropdown.classList.add('hidden');
+                adminMenuBtn.setAttribute('aria-expanded', 'false');
+            });
+        }
+
+        if (importBtn) {
+            importBtn.addEventListener('click', () => {
+                this.showImportModal();
+                adminDropdown.classList.add('hidden');
+                adminMenuBtn.setAttribute('aria-expanded', 'false');
+            });
+        }
+
+        if (exportFilteredBtn) {
+            exportFilteredBtn.addEventListener('click', () => {
+                this.exportFilteredData();
+                adminDropdown.classList.add('hidden');
+                adminMenuBtn.setAttribute('aria-expanded', 'false');
+            });
+        }
+
+        if (clearDbBtn) {
+            clearDbBtn.addEventListener('click', () => {
+                this.confirmClearDatabase();
+                adminDropdown.classList.add('hidden');
+                adminMenuBtn.setAttribute('aria-expanded', 'false');
+            });
+        }
+    }
+
+    setupImportStatusModal() {
+        // This method sets up any import status modal functionality
+        // Currently a placeholder as no import status modal elements were found in HTML
+        // If import status modal elements exist, they would be wired here
+    }
+
+    handleGlobalClick(e) {
+        // Close all dropdowns when clicking outside
+        if (!e.target.closest('.admin-menu') && !e.target.closest('.dropdown')) {
+            document.querySelectorAll('.dropdown').forEach(dropdown => {
+                dropdown.classList.add('hidden');
+            });
+            
+            // Reset aria-expanded attributes
+            document.querySelectorAll('[aria-expanded="true"]').forEach(btn => {
+                btn.setAttribute('aria-expanded', 'false');
+            });
+        }
+    }
+
+    handleEscapeKey() {
+        // Close any open modals or dropdowns
+        document.querySelectorAll('.dropdown').forEach(dropdown => {
+            dropdown.classList.add('hidden');
+        });
+        
+        // Reset aria-expanded attributes
+        document.querySelectorAll('[aria-expanded="true"]').forEach(btn => {
+            btn.setAttribute('aria-expanded', 'false');
+        });
+        
+        // Close any open modals
+        const modals = document.querySelectorAll('.modal:not(.hidden)');
+        modals.forEach(modal => {
+            modal.classList.add('hidden');
+        });
+    }
+
+    handleSaveShortcut() {
+        // Handle Ctrl+Enter or Cmd+Enter to save current form
+        const activeForm = document.querySelector('form:not(.hidden)');
+        if (activeForm) {
+            const submitBtn = activeForm.querySelector('button[type="submit"]');
+            if (submitBtn && !submitBtn.disabled) {
+                submitBtn.click();
+            }
+        }
+    }
+
+    handleKeydown(e) {
+        // Handle general keyboard navigation
+        if (e.target.matches('input, textarea, select')) {
+            // Don't interfere with form input
+            return;
+        }
+        
+        // Handle arrow key navigation in results list
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            const resultItems = document.querySelectorAll('.result-item');
+            const currentSelected = document.querySelector('.result-item.selected');
+            
+            if (resultItems.length > 0) {
+                let nextIndex = 0;
+                
+                if (currentSelected) {
+                    const currentIndex = Array.from(resultItems).indexOf(currentSelected);
+                    if (e.key === 'ArrowDown') {
+                        nextIndex = (currentIndex + 1) % resultItems.length;
+                    } else {
+                        nextIndex = currentIndex > 0 ? currentIndex - 1 : resultItems.length - 1;
+                    }
+                }
+                
+                resultItems[nextIndex].click();
+                resultItems[nextIndex].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                e.preventDefault();
+            }
+        }
+    }
+
+    toggleSearchPane() {
+        const searchPane = document.getElementById('searchPane');
+        const mainContent = document.querySelector('.main-content');
+        const toggleBtn = document.getElementById('searchToggleBtn');
+        
+        if (!searchPane || !mainContent || !toggleBtn) return;
+        
+        const isCollapsed = searchPane.classList.contains('collapsed');
+        
+        if (isCollapsed) {
+            // Expand the search pane
+            searchPane.classList.remove('collapsed');
+            mainContent.classList.remove('search-collapsed');
+            toggleBtn.setAttribute('aria-expanded', 'true');
+        } else {
+            // Collapse the search pane
+            searchPane.classList.add('collapsed');
+            mainContent.classList.add('search-collapsed');
+            toggleBtn.setAttribute('aria-expanded', 'false');
+        }
+        
+        // Save state to localStorage
+        try {
+            localStorage.setItem('iletsb_search_pane_collapsed', (!isCollapsed).toString());
+        } catch (e) {
+            // If storage is unavailable, continue without saving state
+        }
+    }
+
+    handleScheduleSubmit(e) {
+        e.preventDefault();
+        
+        try {
+            const form = e.target;
+            
+            // Get form data using new reusable method
+            const formData = this.getFormData(form);
+            
+            // Create schedule object with schedule number
+            const schedule = {
+                schedule_number: formData.schedule_number,
+                approval_status: formData.approval_status || 'draft',
+                approval_date: formData.approval_date || null,
+                tags: formData.tags || [],
+                ...formData
+            };
+            
+            // Validate required fields
+            if (!schedule.schedule_number) {
+                this.setStatus('Schedule Number is required', 'error');
+                return;
+            }
+            
+            // Validate schedule number format
+            if (!/^\d{2}-\d{3}$/.test(schedule.schedule_number)) {
+                this.setStatus('Schedule Number must be in format XX-XXX (e.g., 25-012)', 'error');
+                return;
+            }
+            
+            // Save schedule (bulk update all matching series)
+            this.saveSchedule(schedule, false);
+            
+        } catch (error) {
+            ErrorHandler.log(error, 'Schedule form submission');
+            this.setStatus(`Error saving schedule: ${error.message}`, 'error');
+        }
+    }
+
+    updateChipSelection(chipContainer, selectedValue) {
+        if (!chipContainer) return;
+        
+        // Remove active class from all chips in this container
+        const chips = chipContainer.querySelectorAll('.chip');
+        chips.forEach(chip => {
+            chip.classList.remove('active');
+        });
+        
+        // Add active class to the selected chip
+        const selectedChip = chipContainer.querySelector(`[data-value="${selectedValue}"]`);
+        if (selectedChip) {
+            selectedChip.classList.add('active');
+        }
+        
+        // Update the corresponding select element
+        const formGroup = chipContainer.closest('.form-group');
+        if (formGroup) {
+            const select = formGroup.querySelector('select');
+            if (select) {
+                select.value = selectedValue;
+                
+                // Trigger change event to update filters
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+        }
+    }
+
+    createNewSchedule() {
+        // Clear current selection and show schedule form
+        this.currentSeriesItem = null;
+        this.selectedItemId = null;
+        
+        // Clear selection styling
+        document.querySelectorAll('.result-item').forEach(row => row.classList.remove('selected'));
+        
+        // Show schedule tab and form
+        const scheduleTab = document.getElementById('scheduleTab');
+        const seriesTab = document.getElementById('seriesTab');
+        const scheduleTabPanel = document.getElementById('scheduleTabPanel');
+        const seriesTabPanel = document.getElementById('seriesTabPanel');
+        const noSelectionMessage = document.getElementById('noSelectionMessage');
+        const tabNavigation = document.getElementById('tabNavigation');
+        
+        if (noSelectionMessage) noSelectionMessage.classList.add('hidden');
+        if (tabNavigation) tabNavigation.classList.remove('hidden');
+        
+        if (scheduleTab) scheduleTab.classList.add('active');
+        if (seriesTab) seriesTab.classList.remove('active');
+        if (scheduleTabPanel) scheduleTabPanel.classList.remove('hidden');
+        if (seriesTabPanel) seriesTabPanel.classList.add('hidden');
+        
+        // Clear and reset schedule form
+        const scheduleForm = document.getElementById('scheduleForm');
+        if (scheduleForm) {
+            scheduleForm.reset();
+            
+            // Focus on schedule number field
+            const scheduleNumberField = document.getElementById('scheduleNumber');
+            if (scheduleNumberField) {
+                scheduleNumberField.focus();
+            }
+        }
+        
+        this.setStatus('Creating new schedule', 'info');
+    }
+
+    showImportModal() {
+        // Trigger the import file input
+        const importFile = document.getElementById('importFile');
+        if (importFile) {
+            importFile.click();
+        }
+    }
+
+    confirmClearDatabase() {
+        // Show confirmation modal for clearing database
+        const confirmed = confirm('Are you sure you want to clear all data from the database? This action cannot be undone.');
+        
+        if (confirmed) {
+            this.clearDatabase();
+        }
+    }
+
+    async clearDatabase() {
+        try {
+            // Clear all data from IndexedDB
+            const transaction = this.db.transaction(['series', 'audit_events'], 'readwrite');
+            
+            await Promise.all([
+                transaction.objectStore('series').clear(),
+                transaction.objectStore('audit_events').clear()
+            ]);
+            
+            // Reset application state
+            this.schedules = [];
+            this.seriesItems = [];
+            this.filteredItems = [];
+            this.currentSeriesItem = null;
+            this.selectedItemId = null;
+            
+            // Update UI
+            this.updateUI();
+            this.setStatus('Database cleared successfully', 'success');
+            
+        } catch (error) {
+            ErrorHandler.log(error, 'Clear database');
+            this.setStatus(`Error clearing database: ${error.message}`, 'error');
+        }
+    }
+
+    validateField(field) {
+        if (!field) return true;
+        
+        const fieldName = field.dataset.field || field.name || field.id;
+        const value = field.value.trim();
+        let isValid = true;
+        let errorMessage = '';
+        
+        // Clear existing error state
+        this.clearFieldError(field);
+        
+        // Validate based on field type and requirements
+        if (field.hasAttribute('required') && !value) {
+            isValid = false;
+            errorMessage = 'This field is required';
+        } else if (fieldName === 'schedule_number' && value) {
+            if (!/^\d{2}-\d{3}$/.test(value)) {
+                isValid = false;
+                errorMessage = 'Schedule number must be in format XX-XXX (e.g., 25-012)';
+            }
+        } else if (fieldName === 'item_number' && value) {
+            if (!/^\d+([A-Za-z]|\.\d+)?$/.test(value)) {
+                isValid = false;
+                errorMessage = 'Item number must be numeric with optional letter or decimal suffix';
+            }
+        } else if (field.type === 'email' && value) {
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(value)) {
+                isValid = false;
+                errorMessage = 'Please enter a valid email address';
+            }
+        } else if (field.type === 'number' && value) {
+            const numValue = parseFloat(value);
+            if (isNaN(numValue) || numValue < 0) {
+                isValid = false;
+                errorMessage = 'Please enter a valid positive number';
+            }
+        }
+        
+        // Show error if validation failed
+        if (!isValid) {
+            this.showFieldError(field, errorMessage);
+        }
+        
+        return isValid;
+    }
+
+    clearFieldError(field) {
+        if (!field) return;
+        
+        // Remove error styling from field
+        field.classList.remove('error');
+        
+        // Remove error message
+        const formGroup = field.closest('.form-group');
+        if (formGroup) {
+            const existingError = formGroup.querySelector('.field-error');
+            if (existingError) {
+                existingError.remove();
+            }
+        }
+    }
+
+    showFieldError(field, message) {
+        if (!field || !message) return;
+        
+        // Add error styling to field
+        field.classList.add('error');
+        
+        // Add error message
+        const formGroup = field.closest('.form-group');
+        if (formGroup) {
+            // Remove existing error message first
+            const existingError = formGroup.querySelector('.field-error');
+            if (existingError) {
+                existingError.remove();
+            }
+            
+            // Create new error message
+            const errorElement = document.createElement('div');
+            errorElement.className = 'field-error';
+            errorElement.textContent = message;
+            formGroup.appendChild(errorElement);
+        }
+    }
+
+    async exportData() {
+        try {
+            // Get all data from database
+            const series = await this.getAllSeries();
+            const auditEvents = await this.getAllAuditEvents();
+            
+            // Create export object with metadata
+            const exportData = {
+                metadata: {
+                    exported_at: new Date().toISOString(),
+                    version: '3.7',
+                    total_series: series.length,
+                    total_schedules: new Set(series.map(s => s.schedule_number).filter(Boolean)).size
+                },
+                series: series,
+                audit_events: auditEvents
+            };
+            
+            // Create and download file
+            const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `iletsb-records-export-${new Date().toISOString().split('T')[0]}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            this.setStatus(`Exported ${series.length} series records successfully`, 'success');
+            
+        } catch (error) {
+            ErrorHandler.log(error, 'Export data');
+            this.setStatus(`Error exporting data: ${error.message}`, 'error');
+        }
+    }
+
+    async exportFilteredData() {
+        try {
+            // Use currently filtered items
+            const filteredSeries = this.filteredItems || [];
+            
+            if (filteredSeries.length === 0) {
+                this.setStatus('No records to export with current filters', 'error');
+                return;
+            }
+            
+            // Get audit events for filtered series
+            const seriesIds = filteredSeries.map(s => s._id);
+            const allAuditEvents = await this.getAllAuditEvents();
+            const filteredAuditEvents = allAuditEvents.filter(event => 
+                event.entity === 'series' && seriesIds.includes(event.entity_id)
+            );
+            
+            // Create export object
+            const exportData = {
+                metadata: {
+                    exported_at: new Date().toISOString(),
+                    version: '3.7',
+                    filtered_export: true,
+                    total_series: filteredSeries.length,
+                    total_schedules: new Set(filteredSeries.map(s => s.schedule_number).filter(Boolean)).size
+                },
+                series: filteredSeries,
+                audit_events: filteredAuditEvents
+            };
+            
+            // Create and download file
+            const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `iletsb-records-filtered-export-${new Date().toISOString().split('T')[0]}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            this.setStatus(`Exported ${filteredSeries.length} filtered series records successfully`, 'success');
+            
+        } catch (error) {
+            ErrorHandler.log(error, 'Export filtered data');
+            this.setStatus(`Error exporting filtered data: ${error.message}`, 'error');
+        }
+    }
+
+    async getAllAuditEvents() {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction(['audit_events'], 'readonly');
+            const store = transaction.objectStore('audit_events');
+            const request = store.getAll();
+            
+            request.onsuccess = () => resolve(request.result || []);
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    confirmDeleteSeriesItem() {
+        if (!this.currentSeriesItem) {
+            this.setStatus('No series item selected for deletion', 'error');
+            return;
+        }
+        
+        const confirmed = confirm(`Are you sure you want to delete the series item "${this.currentSeriesItem.record_series_title}"? This action cannot be undone.`);
+        
+        if (confirmed) {
+            this.deleteSeriesItem(this.currentSeriesItem._id);
+        }
+    }
+
+    async deleteSeriesItem(id) {
+        try {
+            // Delete from database
+            const transaction = this.db.transaction(['series'], 'readwrite');
+            const store = transaction.objectStore('series');
+            await store.delete(id);
+            
+            // Log audit event
+            await this.logAuditEvent('series', id, 'delete', this.currentSeriesItem);
+            
+            // Clear current selection
+            this.currentSeriesItem = null;
+            this.selectedItemId = null;
+            
+            // Update UI
+            this.updateUI();
+            this.hideDetails();
+            this.setStatus('Series item deleted successfully', 'success');
+            
+        } catch (error) {
+            ErrorHandler.log(error, 'Delete series item');
+            this.setStatus(`Error deleting series item: ${error.message}`, 'error');
+        }
+    }
+
+    confirmDeleteSchedule() {
+        // This would delete schedule assignment from all matching series
+        const confirmed = confirm('Are you sure you want to remove schedule assignment from all matching series? This action cannot be undone.');
+        
+        if (confirmed) {
+            // Implementation would go here if needed
+            this.setStatus('Schedule deletion not implemented', 'info');
+        }
+    }
+
+    async importData(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        try {
+            const text = await file.text();
+            const importData = JSON.parse(text);
+            
+            if (!importData.series || !Array.isArray(importData.series)) {
+                this.setStatus('Invalid import file: missing series array', 'error');
+                return;
+            }
+
+            let importedCount = 0;
+            const errors = [];
+
+            // Process each series item
+            for (const item of importData.series) {
+                try {
+                    // Handle legacy application_number field
+                    if (item.application_number && !item.schedule_number) {
+                        item.schedule_number = item.application_number;
+                        delete item.application_number;
+                    }
+                    
+                    // Normalize arrays
+                    ['tags', 'media_types', 'omb_or_statute_refs', 'related_series'].forEach(field => {
+                        if (item[field] && typeof item[field] === 'string') {
+                            item[field] = item[field].split(/[,;\n]/).map(s => s.trim()).filter(Boolean);
+                        }
+                    });
+                    
+                    // Remove _id to prevent conflicts - let database assign new IDs
+                    delete item._id;
+                    
+                    // Set timestamps
+                    const now = new Date().toISOString();
+                    item.created_at = item.created_at || now;
+                    item.updated_at = now;
+                    item.version = (item.version || 0) + 1;
+                    
+                    // Save to database
+                    await this.saveSeries(item, false);
+                    importedCount++;
+                    
+                } catch (error) {
+                    errors.push(`Error importing item "${item.record_series_title || 'Unknown'}": ${error.message}`);
+                }
+            }
+            
+            // Import audit events if present
+            if (importData.audit_events && Array.isArray(importData.audit_events)) {
+                for (const auditEvent of importData.audit_events) {
+                    try {
+                        // Remove _id to prevent conflicts
+                        delete auditEvent._id;
+                        await this.logAuditEvent(
+                            auditEvent.entity,
+                            auditEvent.entity_id,
+                            auditEvent.action,
+                            auditEvent.payload,
+                            auditEvent.actor,
+                            auditEvent.at
+                        );
+                    } catch (error) {
+                        // Silently handle audit event import errors
+                    }
+                }
+            }
+            
+            // Update UI and show results
+            this.updateUI();
+            
+            if (errors.length > 0) {
+                console.warn('Import errors:', errors);
+                this.setStatus(`Imported ${importedCount} records with ${errors.length} errors`, 'success');
+            } else {
+                this.setStatus(`Successfully imported ${importedCount} series records`, 'success');
+            }
+            
+        } catch (error) {
+            ErrorHandler.log(error, 'Import data');
+            this.setStatus(`Error importing data: ${error.message}`, 'error');
+        } finally {
+            // Clear the file input
+            event.target.value = '';
+        }
+    }
+
     debounceSearch(searchText) {
         clearTimeout(this.searchTimeout);
         this.searchTimeout = setTimeout(() => {
@@ -1026,6 +1724,8 @@ class ILETSBApp {
             const searchCriteria = this.buildSearchCriteria();
             this.filteredItems = await this.searchAndFilterSeries(searchCriteria);
             
+            console.log('Filtered items:', this.filteredItems.length, this.filteredItems);
+            
             // Update UI
             await this.renderResults();
             this.updateResultsSummary();
@@ -1109,7 +1809,6 @@ class ILETSBApp {
         const summary = document.getElementById('filterSummary');
         if (!summary) return;
         
-        const criteria = this.buildSearchCriteria();
         const activeFilters = [];
         
         if (criteria.searchText) activeFilters.push(`Text: "${criteria.searchText}"`);
@@ -1129,8 +1828,6 @@ class ILETSBApp {
             ? `Active filters: ${activeFilters.join(', ')}`
             : 'No active filters';
     }
-
-    // Removed old sortResults method - sorting now handled in searchAndFilterSeries
 
     clearFilters() {
         const elements = [
@@ -1283,7 +1980,12 @@ class ILETSBApp {
         const resultsList = document.getElementById('resultsList');
         const emptyState = document.getElementById('emptyState');
         
-        if (!resultsList) return;
+        console.log('Rendering results:', this.filteredItems.length, 'items');
+        
+        if (!resultsList) {
+            console.error('Results list element not found');
+            return;
+        }
         
         // Clear previous results but preserve emptyState in its original position
         const children = Array.from(resultsList.children);
@@ -1298,6 +2000,7 @@ class ILETSBApp {
             if (emptyState) {
                 emptyState.style.display = 'block';
             }
+            console.log('No filtered items to display');
             return;
         }
 
@@ -1311,6 +2014,8 @@ class ILETSBApp {
             const row = this.createResultRow(item, index);
             resultsList.appendChild(row);
         });
+        
+        console.log('Rendered', this.filteredItems.length, 'result rows');
         
         // Highlight selected item if any
         if (this.selectedItemId) {
@@ -1448,7 +2153,7 @@ class ILETSBApp {
             showSeriesTab = true;
             if (seriesItem && Object.keys(seriesItem).length > 0) {
                 // Forms will be populated after tab is made visible
-                this.populateFormsFromSeries(seriesItem);
+                this.populateSeriesForm(seriesItem);
             } else {
                 const seriesForm = document.getElementById('seriesForm');
                 if (seriesForm) seriesForm.reset();
@@ -1523,8 +2228,6 @@ class ILETSBApp {
             scheduleTabPanel.classList.toggle('hidden', tabName !== 'schedule');
         }
         
-        // Schedule dropdown removed from Series tab - no longer needed
-        
         // Store current tab for persistence
         this.currentTab = tabName;
     }
@@ -1587,267 +2290,341 @@ class ILETSBApp {
     }
 
     populateSeriesForm(item) {
-        const fields = {
-            'seriesScheduleNumber': item.schedule_number || '',
-            'itemNumber': item.item_number || '',
-            'seriesTitle': item.record_series_title || '',
-            'seriesDescription': item.ui_extras?.seriesDescription || '',
-            'datesStart': item.dates_covered_start || '',
-            'datesEnd': item.dates_covered_end || '',
-            'seriesDivision': item.division || '',
-            'seriesContact': item.ui_extras?.seriesContact || '',
-            'seriesLocation': item.ui_extras?.seriesLocation || '',
-            'retentionText': item.retention_text || '',
-            'retentionTrigger': item.ui_extras?.retentionTrigger || '',
-            'retentionTerm': item.ui_extras?.retentionTerm || '',
-            'volumePaper': item.ui_extras?.volumePaper || '',
-            'volumeElectronic': item.ui_extras?.volumeElectronic || '',
-            'annualPaper': item.ui_extras?.annualPaper || '',
-            'annualElectronic': item.ui_extras?.annualElectronic || '',
-            'arrangement': item.ui_extras?.arrangement || '',
-            'mediaTypes': Array.isArray(item.media_types) ? item.media_types.join(', ') : (item.media_types || ''),
-            'electronicStandard': item.ui_extras?.electronicStandard || '',
-            'numberSizeFiles': item.ui_extras?.numberSizeFiles || '',
-            'indexFindingAids': item.ui_extras?.indexFindingAids || '',
-            'ombStatuteRefs': Array.isArray(item.omb_or_statute_refs) ? item.omb_or_statute_refs.join(', ') : (item.omb_or_statute_refs || ''),
-            'relatedSeries': Array.isArray(item.related_series) ? item.related_series.join(', ') : (item.related_series || ''),
-            'representativeName': item.ui_extras?.representativeName || '',
-            'representativeTitle': item.ui_extras?.representativeTitle || '',
-            'representativePhone': item.ui_extras?.representativePhone || '',
-            'recordsOfficerName': item.ui_extras?.recordsOfficerName || '',
-            'recordsOfficerPhone': item.ui_extras?.recordsOfficerPhone || '',
-            'seriesNotes': item.notes || ''
-        };
-
-        // Set text and number inputs
-        Object.keys(fields).forEach(id => {
-            const element = document.getElementById(id);
-            if (element) {
-                element.value = fields[id];
-            }
-        });
-
-        // Set checkboxes
-        const auditHoldCheckbox = document.getElementById('auditHold');
-        const litigationHoldCheckbox = document.getElementById('litigationHold');
-
-        if (auditHoldCheckbox) auditHoldCheckbox.checked = item.audit_hold_required || false;
-        if (litigationHoldCheckbox) litigationHoldCheckbox.checked = item.litigation_hold_required || false;
-
-        // Toggle retention term visibility
-        const retentionTermGroup = document.getElementById('retentionTermGroup');
-        if (retentionTermGroup) {
-            retentionTermGroup.style.display = 'none';
+        if (!item) return;
+        
+        // Store current item for form operations
+        this.currentSeriesItem = item;
+        
+        // Use the new reusable populateForm method
+        this.populateForm(document.getElementById('seriesForm'), item);
+        
+        // Handle special cases
+        if (item.dates_covered_end === 'present') {
+            document.getElementById('datesEnd').value = 'present';
+        }
+        
+        // Show delete button if this is an existing record
+        const deleteBtn = document.getElementById('deleteSeriesBtn');
+        if (deleteBtn) {
+            deleteBtn.classList.toggle('hidden', !item._id);
+        }
+        
+        // Show clone button if this is an existing record
+        const cloneBtn = document.getElementById('cloneRecordBtn');
+        if (cloneBtn) {
+            cloneBtn.classList.toggle('hidden', !item._id);
         }
     }
-
+    
     populateScheduleForm(schedule) {
-        // Set the schedule number display (read-only)
-        const scheduleNumDisplay = document.getElementById('scheduleNum');
-        if (scheduleNumDisplay) {
-            scheduleNumDisplay.textContent = schedule.schedule_number || 'Not assigned';
+        if (!schedule) return;
+        
+        // Store current schedule for form operations
+        this.currentSchedule = schedule;
+        
+        // Use the new reusable populateForm method
+        this.populateForm(document.getElementById('scheduleForm'), schedule);
+        
+        // Show schedule number as static text
+        const scheduleNumEl = document.getElementById('scheduleNum');
+        if (scheduleNumEl) {
+            scheduleNumEl.textContent = schedule.schedule_number || 'Not assigned';
         }
-
-        const fields = {
-            'approvalStatus': schedule.approval_status || 'draft',
-            'approvalDate': schedule.approval_date || '',
-            'scheduleDivision': schedule.division || '',
-            'scheduleNotes': schedule.notes || '',
-            'scheduleTags': schedule.tags ? schedule.tags.join(', ') : ''
-        };
-
-        // Set text inputs and selects
-        Object.keys(fields).forEach(id => {
-            const element = document.getElementById(id);
-            if (element) {
-                element.value = fields[id];
-            }
-        });
-
-        // Update status chips to reflect current selection
-        const statusSelect = document.getElementById('approvalStatus');
-        if (statusSelect) {
-            const chipContainer = statusSelect.parentElement.querySelector('.status-chips');
-            if (chipContainer) {
-                this.updateChipSelection(chipContainer, statusSelect.value);
-            }
+        
+        // Show delete button if this is an existing record
+        const deleteBtn = document.getElementById('deleteScheduleBtn');
+        if (deleteBtn) {
+            deleteBtn.classList.toggle('hidden', !schedule._id);
         }
     }
-
-    createNewSchedule() {
-        this.currentSchedule = null;
-        
-        // Show only schedule section for new schedule creation
-        this.displayDetails({}, null);
-        
-        const scheduleForm = document.getElementById('scheduleForm');
-        if (scheduleForm) scheduleForm.reset();
-        
-        const deleteScheduleBtn = document.getElementById('deleteScheduleBtn');
-        const scheduleAppNumInput = document.getElementById('scheduleAppNum');
-        
-        if (deleteScheduleBtn) deleteScheduleBtn.classList.add('hidden');
-        if (scheduleAppNumInput) scheduleAppNumInput.focus();
-    }
-
-    createNewSeriesItem() {
-        this.currentSeriesItem = null;
-        this.selectedItemId = null;
-        
-        // Clear any existing selection
-        document.querySelectorAll('.result-item').forEach(row => row.classList.remove('selected'));
-        
-        // Show details pane and series tab
-        this.displayDetails(null, {});
-        this.switchToTab('series');
-        
-        // Reset the form
-        const seriesForm = document.getElementById('seriesForm');
-        if (seriesForm) seriesForm.reset();
-        
-        const deleteSeriesBtn = document.getElementById('deleteSeriesBtn');
-        
-        if (deleteSeriesBtn) deleteSeriesBtn.classList.add('hidden');
-        
-        // Focus on the item number field since schedule dropdown was removed
-        const itemNumberInput = document.getElementById('itemNumber');
-        if (itemNumberInput) itemNumberInput.focus();
-    }
-
-    async handleScheduleSubmit(e) {
-        e.preventDefault();
-        
-        const schedule = {
-            schedule_number: document.getElementById('scheduleNum').textContent,
-            approval_status: document.getElementById('approvalStatus').value.toLowerCase(),
-            approval_date: document.getElementById('approvalDate').value,
-            division: document.getElementById('scheduleDivision').value,
-            notes: document.getElementById('scheduleNotes').value,
-            tags: document.getElementById('scheduleTags').value 
-                ? document.getElementById('scheduleTags').value.split(',').map(t => t.trim()).filter(t => t) 
-                : []
-        };
-
-        // Count how many series records will be affected
-        const allSeries = await this.getAllSeries();
-        const affectedCount = allSeries.filter(s => s.schedule_number === schedule.schedule_number).length;
-        
-        // Show loading state for bulk updates
-        if (affectedCount > 1) {
-            this.showBulkUpdateProgress(affectedCount);
-        }
+    
+    async handleSeriesFormSubmit(event) {
+        event.preventDefault();
         
         try {
-            if (this.currentSchedule) {
-                schedule._id = this.currentSchedule._id;
-                schedule.version = (this.currentSchedule.version || 1) + 1;
-                await this.saveSchedule(schedule, true);
+            const form = event.target;
+            const isUpdate = !!this.currentSeriesItem?._id;
+            
+            // Get form data using new reusable method
+            const formData = this.getFormData(form);
+            
+            // Create/update series item with timestamps and version
+            const now = new Date().toISOString();
+            const seriesItem = {
+                ...(this.currentSeriesItem || {}),
+                ...formData,
+                updated_at: now
+            };
+            
+            if (!isUpdate) {
+                seriesItem.created_at = now;
+                seriesItem.version = 1;
             } else {
-                await this.saveSchedule(schedule);
+                seriesItem.version = (this.currentSeriesItem.version || 0) + 1;
             }
             
-            // Provide feedback about bulk update
+            await this.saveSeries(seriesItem, isUpdate);
+            await this.logAuditEvent('series', seriesItem._id, isUpdate ? 'update' : 'create', seriesItem);
+            this.updateUI();
+            this.setStatus(`Series item ${isUpdate ? 'updated' : 'created'} successfully`);
+        } catch (error) {
+            ErrorHandler.log(error, 'Series form submission');
+            this.setStatus(`Error saving series item: ${error.message}`, 'error');
+        }
+    }
+    
+    async handleScheduleFormSubmit(event) {
+        event.preventDefault();
+        
+        try {
+            const form = event.target;
+            const scheduleNumber = document.getElementById('scheduleNum').textContent;
+            if (scheduleNumber === 'Not assigned') {
+                throw new Error('Cannot save schedule without a schedule number');
+            }
+            
+            // Get form data using new reusable method
+            const formData = this.getFormData(form);
+            
+            // Create schedule object with schedule number
+            const schedule = {
+                ...formData,
+                schedule_number: scheduleNumber
+            };
+            
+            // Count affected series for bulk update feedback
+            const allSeries = await this.getAllSeries();
+            const affectedCount = allSeries.filter(s => s.schedule_number === scheduleNumber).length;
+            
+            if (affectedCount > 1) {
+                this.showBulkUpdateProgress(affectedCount);
+            }
+            
+            await this.saveSchedule(schedule, true);
+            
             const message = affectedCount > 1 
                 ? `Schedule saved successfully. Updated ${affectedCount} series records.`
                 : 'Schedule saved successfully';
-            this.setStatus(message, 'success');
             
-            // Hide loading state and refresh UI
             this.hideBulkUpdateProgress();
-            await this.updateUI();
-            this.cancelScheduleEdit();
+            this.updateUI();
+            this.setStatus(message, 'success');
         } catch (error) {
-            ErrorHandler.log(error, 'Schedule save', APP_CONSTANTS.ERROR_TYPES.DATABASE);
+            ErrorHandler.log(error, 'Schedule form submission');
             this.hideBulkUpdateProgress();
-            this.setStatus('Error saving schedule: ' + error.message, 'error');
+            this.setStatus(`Error saving schedule: ${error.message}`, 'error');
         }
     }
-
-    async handleSaveAsNew(e) {
-        e.preventDefault();
+    
+    // Form Handling Utilities
+    getFormData(formElement) {
+        const data = {};
         
-        // Basic validation
-        const seriesTitleEl = document.getElementById('seriesTitle');
-        if (!seriesTitleEl || !seriesTitleEl.value.trim()) {
-            this.setStatus('Record Series Title is required', 'error');
+        // Handle regular fields with data-field attributes
+        const fields = formElement.querySelectorAll('[data-field]');
+        fields.forEach(field => {
+            const key = field.dataset.field;
+            let value;
+            
+            if (field.type === 'checkbox') {
+                value = field.checked;
+            } else if (field.hasAttribute('data-array-input')) {
+                value = this.parseArrayInput(field.value);
+            } else {
+                value = field.value || null;
+            }
+            
+            // Handle nested object fields (e.g., "ui_extras.seriesDescription")
+            if (key.includes('.')) {
+                this.setNestedValue(data, key, value);
+            } else {
+                data[key] = value;
+            }
+        });
+        
+        return data;
+    }
+    
+    populateForm(formElement, data) {
+        // Handle all fields with data-field attributes
+        const fields = formElement.querySelectorAll('[data-field]');
+        fields.forEach(field => {
+            const key = field.dataset.field;
+            let value;
+            
+            // Get value from nested object if needed (e.g., "ui_extras.seriesDescription")
+            if (key.includes('.')) {
+                value = this.getNestedValue(data, key);
+            } else {
+                value = data[key];
+            }
+            
+            // Set field value based on type
+            if (field.type === 'checkbox') {
+                field.checked = Boolean(value);
+            } else if (field.hasAttribute('data-array-input') && Array.isArray(value)) {
+                field.value = value.join(', ');
+            } else {
+                field.value = value || '';
+            }
+        });
+    }
+    
+    parseArrayInput(inputValue) {
+        if (!inputValue) return [];
+        if (Array.isArray(inputValue)) return inputValue;
+        
+        // Split on commas, semicolons, or newlines
+        return inputValue.split(/[,;\n]/)
+            .map(item => item.trim())
+            .filter(Boolean);
+    }
+    
+    // Helper function to set nested object values (e.g., "ui_extras.seriesDescription")
+    setNestedValue(obj, path, value) {
+        const keys = path.split('.');
+        let current = obj;
+        
+        for (let i = 0; i < keys.length - 1; i++) {
+            const key = keys[i];
+            if (!(key in current) || typeof current[key] !== 'object' || current[key] === null) {
+                current[key] = {};
+            }
+            current = current[key];
+        }
+        
+        current[keys[keys.length - 1]] = value;
+    }
+    
+    // Helper function to get nested object values (e.g., "ui_extras.seriesDescription")
+    getNestedValue(obj, path) {
+        const keys = path.split('.');
+        let current = obj;
+        
+        for (const key of keys) {
+            if (current && typeof current === 'object' && key in current) {
+                current = current[key];
+            } else {
+                return null;
+            }
+        }
+        
+        return current;
+    }
+    
+    // Clone Record functionality
+    cloneCurrentRecord() {
+        if (!this.currentSeriesItem) {
+            this.setStatus('No record selected to clone', 'error');
             return;
         }
-
-        // Validate schedule number format if provided
-        const scheduleNumEl = document.getElementById('seriesScheduleNumber');
-        if (scheduleNumEl && scheduleNumEl.value.trim()) {
-            if (!this.validateScheduleNumber(scheduleNumEl.value.trim())) {
-                this.setStatus('Schedule Number must be in format ##-### (e.g., 25-001)', 'error');
-                return;
-            }
-        }
-
-        // Validate item number format if provided
-        const itemNumberEl = document.getElementById('itemNumber');
-        if (itemNumberEl && itemNumberEl.value.trim()) {
-            if (!this.validateItemNumber(itemNumberEl.value.trim())) {
-                this.setStatus('Item Number format is invalid', 'error');
-                return;
-            }
-        }
-
-        try {
-            // Save as new record (ignore currentSeriesItem)
-            await this.saveSeriesAsNew();
-            this.cancelSeriesEdit();
-            // Force refresh after form is closed
-            setTimeout(() => this.applyFilters(), 100);
-        } catch (error) {
-            ErrorHandler.log(error, 'Save series as new', APP_CONSTANTS.ERROR_TYPES.DATABASE);
-            this.setStatus('Error saving new series: ' + error.message, 'error');
-        }
-    }
-
-    async handleSeriesSubmit(e) {
-        e.preventDefault();
         
-        // Basic validation
-        const seriesTitleEl = document.getElementById('seriesTitle');
-        if (!seriesTitleEl || !seriesTitleEl.value.trim()) {
-            this.setStatus('Record Series Title is required', 'error');
-            return;
+        // Create a new form with current data but clear identifying fields
+        const clonedData = { ...this.currentSeriesItem };
+        delete clonedData._id;
+        delete clonedData.created_at;
+        delete clonedData.updated_at;
+        delete clonedData.version;
+        
+        // Clear the current selection to indicate this is a new record
+        this.currentSeriesItem = null;
+        this.selectedItemId = null;
+        
+        // Clear selection styling
+        document.querySelectorAll('.result-item').forEach(row => row.classList.remove('selected'));
+        
+        // Populate the form with cloned data
+        this.populateForm(document.getElementById('seriesForm'), clonedData);
+        
+        // Hide delete button since this is a new record
+        const deleteBtn = document.getElementById('deleteSeriesBtn');
+        if (deleteBtn) {
+            deleteBtn.classList.add('hidden');
         }
-
-        // Validate schedule number format if provided
-        const scheduleNumEl = document.getElementById('seriesScheduleNumber');
-        if (scheduleNumEl && scheduleNumEl.value.trim()) {
-            if (!this.validateScheduleNumber(scheduleNumEl.value.trim())) {
-                this.setStatus('Schedule Number must be in format ##-### (e.g., 25-001)', 'error');
-                return;
-            }
+        
+        // Show clone button
+        const cloneBtn = document.getElementById('cloneRecordBtn');
+        if (cloneBtn) {
+            cloneBtn.classList.remove('hidden');
         }
-
-        // Validate item number format if provided
-        const itemNumberEl = document.getElementById('itemNumber');
-        if (itemNumberEl && itemNumberEl.value.trim()) {
-            if (!this.validateItemNumber(itemNumberEl.value.trim())) {
-                this.setStatus('Item Number format is invalid', 'error');
-                return;
-            }
+        
+        this.setStatus('Record cloned. Modify as needed and save as new record.', 'success');
+    }
+    
+    // Enhanced form event handlers setup
+    setupFormEventHandlers() {
+        // Series form submission
+        const seriesForm = document.getElementById('seriesForm');
+        if (seriesForm) {
+            seriesForm.addEventListener('submit', (e) => this.handleSeriesFormSubmit(e));
         }
-
+        
+        // Schedule form submission
+        const scheduleForm = document.getElementById('scheduleForm');
+        if (scheduleForm) {
+            scheduleForm.addEventListener('submit', (e) => this.handleScheduleFormSubmit(e));
+        }
+        
+        // Clone record button
+        const cloneBtn = document.getElementById('cloneRecordBtn');
+        if (cloneBtn) {
+            cloneBtn.addEventListener('click', () => this.cloneCurrentRecord());
+        }
+        
+        // Save as new button
+        const saveAsNewBtn = document.getElementById('saveAsNewBtn');
+        if (saveAsNewBtn) {
+            saveAsNewBtn.addEventListener('click', (e) => this.handleSaveAsNew(e));
+        }
+        
+        // Cancel buttons
+        const cancelSeriesBtn = document.getElementById('cancelSeriesBtn');
+        if (cancelSeriesBtn) {
+            cancelSeriesBtn.addEventListener('click', () => this.cancelSeriesEdit());
+        }
+        
+        const cancelScheduleBtn = document.getElementById('cancelScheduleBtn');
+        if (cancelScheduleBtn) {
+            cancelScheduleBtn.addEventListener('click', () => this.cancelScheduleEdit());
+        }
+    }
+    
+    async handleSaveAsNew(event) {
+        event.preventDefault();
+        
         try {
-            // Use the new v3.1 save function
-            await this.saveSeriesFromForms();
+            const form = document.getElementById('seriesForm');
+            const formData = this.getFormData(form);
+            
+            // Validate required fields
+            if (!formData.record_series_title) {
+                this.setStatus('Record Series Title is required', 'error');
+                return;
+            }
+            
+            // Create new series item with timestamps
+            const now = new Date().toISOString();
+            const seriesItem = {
+                ...formData,
+                created_at: now,
+                updated_at: now,
+                version: 1
+            };
+            
+            const savedItem = await this.saveSeries(seriesItem, false);
+            await this.logAuditEvent('series', savedItem._id, 'create', seriesItem);
+            
+            this.updateUI();
+            this.setStatus('New series record created successfully', 'success');
+            
+            // Clear form and hide details
             this.cancelSeriesEdit();
-            // Force refresh after form is closed
-            setTimeout(() => this.applyFilters(), 100);
         } catch (error) {
-            ErrorHandler.log(error, 'Series save', APP_CONSTANTS.ERROR_TYPES.DATABASE);
-            this.setStatus('Error saving series: ' + error.message, 'error');
+            ErrorHandler.log(error, 'Save series as new');
+            this.setStatus(`Error creating new series: ${error.message}`, 'error');
         }
     }
-
-    cancelScheduleEdit() {
-        this.currentSchedule = null;
-        this.hideDetails();
-    }
-
+    
     cancelSeriesEdit() {
         this.currentSeriesItem = null;
         this.selectedItemId = null;
@@ -1855,789 +2632,13 @@ class ILETSBApp {
         document.querySelectorAll('.result-item').forEach(row => row.classList.remove('selected'));
         this.hideDetails();
     }
-
-    clearSelectionAndHideDetails() {
-        document.querySelectorAll('.result-item.selected').forEach(row => row.classList.remove('selected'));
-        this.selectedItemId = null;
+    
+    cancelScheduleEdit() {
+        this.currentSchedule = null;
         this.hideDetails();
     }
-
-    // Import/Export v3.1
-    async exportData() {
-        try {
-            const seriesItems = await this.getAllSeries();
-            const auditEvents = await this.getAllAuditEvents();
-            
-            // Export in v3.1 format with schedule_number terminology
-            const cleanSeries = seriesItems.map(item => {
-                const cleanItem = {
-                    schedule_number: item.schedule_number || null,
-                    item_number: item.item_number || null,
-                    record_series_title: item.record_series_title || null,
-                    division: item.division || null,
-                    approval_status: item.approval_status || null,
-                    approval_date: item.approval_date || null,
-                    dates_covered_start: item.dates_covered_start || null,
-                    dates_covered_end: item.dates_covered_end || null,
-                    tags: item.tags || [],
-                    media_types: item.media_types || [],
-                    omb_or_statute_refs: item.omb_or_statute_refs || [],
-                    related_series: item.related_series || [],
-                    retention_text: item.retention_text || null,
-                    notes: item.notes || null,
-                    ui_extras: item.ui_extras || {},
-                    created_at: item.created_at || null,
-                    updated_at: item.updated_at || null,
-                    version: item.version || 1
-                };
-                
-                return cleanItem;
-            });
-            
-            const exportData = {
-                exported_at: new Date().toISOString(),
-                version: "3.1",
-                agency: "ILETSB",
-                series: cleanSeries,
-                audit_events: auditEvents || []
-            };
-
-            const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `iletsb-records-v3.1-${new Date().toISOString().split('T')[0]}.json`;
-            a.click();
-            URL.revokeObjectURL(url);
-            
-            await this.logAuditEvent('system', null, 'export', { recordCount: seriesItems.length, version: "3.1" });
-            this.setStatus('Data exported successfully (v3.1 format)', 'success');
-        } catch (error) {
-            ErrorHandler.log(error, 'Data export', APP_CONSTANTS.ERROR_TYPES.EXPORT);
-            this.setStatus('Error exporting data: ' + error.message, 'error');
-        }
-    }
-
-    async importData(event) {
-        const file = event.target.files[0];
-        if (!file) return;
-
-        // Initialize status modal
-        this.showImportStatus();
-        this.clearImportLog();
-        this.updateImportStatus('Starting import...');
-        this.updateImportCounts(0, 0);
-        this.logImportMessage(`Importing file: ${file.name}`);
-
-        try {
-            const text = await file.text();
-            const data = JSON.parse(text);
-            
-            this.logImportMessage('Validating file structure...');
-            const validation = this.validateImportData(data);
-            if (!validation.valid) {
-                throw new Error(`Invalid file format: ${validation.errors.join(', ')}`);
-            }
-
-            const results = {
-                series: { created: 0, updated: 0, skipped: 0, errors: [] },
-                auditEvents: { created: 0, updated: 0, skipped: 0, errors: [] }
-            };
-
-            // Import series (v3.1 with legacy support)
-            const seriesArray = data.series || data.series_items || [];
-            this.logImportMessage(`Processing ${seriesArray.length} series items...`);
-            
-            for (const item of seriesArray) {
-                try {
-                    // Legacy support: map application_number to schedule_number
-                    if (item.application_number && !item.schedule_number) {
-                        item.schedule_number = item.application_number;
-                        delete item.application_number;
-                    }
-                    
-                    const identifier = `${item.schedule_number || 'unassigned'}-${item.item_number || 'no-item'}`;
-                    this.logImportMessage(`Importing series ${identifier}: ${item.record_series_title}...`);
-                    
-                    const result = await this.upsertSeriesV31(item);
-                    results.series[result.action]++;
-                    this.logImportMessage(`Series ${identifier} ${result.action} successfully`);
-                } catch (error) {
-                    const identifier = `${item.schedule_number || item.application_number || 'unassigned'}-${item.item_number || 'no-item'}`;
-                    results.series.errors.push(`Series ${identifier}: ${error.message}`);
-                    results.series.skipped++;
-                    this.logImportMessage(`Error importing series: ${error.message}`);
-                }
-                
-                // Update counts with unique schedule numbers (remove await to prevent blocking)
-                this.updateRecordCount();
-            }
-
-            // Show final results
-            const totalSeries = results.series.created + results.series.updated;
-            const hasErrors = results.series.errors.length > 0;
-            
-            if (hasErrors) {
-                this.updateImportStatus(`Import completed with ${results.series.errors.length} errors`);
-            } else {
-                this.updateImportStatus('Import completed successfully');
-            }
-            
-            this.logImportMessage(`Final results: ${totalSeries} series items processed`);
-            this.updateImportCounts(totalSeries, 0);
-            
-            await this.logAuditEvent('system', null, 'import', results);
-            this.showImportSummary(results);
-            // Force UI refresh after import completes
-            await this.loadDataOptimized();
-        } catch (error) {
-            ErrorHandler.log(error, 'Data import', APP_CONSTANTS.ERROR_TYPES.IMPORT);
-            this.updateImportStatus('Import failed');
-            this.logImportMessage(`Error: ${error.message}`);
-            this.setStatus('Error importing data: ' + error.message, 'error');
-        }
-    }
-
-    validateImportData(data) {
-        const errors = [];
-        const validStatuses = ['draft', 'pending', 'approved', 'superseded'];
-        
-        // Validate basic structure - support both new and legacy formats
-        const seriesArray = data.series || data.series_items;
-        if (!seriesArray || !Array.isArray(seriesArray)) {
-            errors.push('Missing or invalid series array (expected "series" or "series_items")');
-        }
-        
-        // Validate series items
-        if (seriesArray) {
-            seriesArray.forEach((item, i) => {
-                if (!item.record_series_title) {
-                    errors.push(`Series item ${i}: Missing record_series_title (required)`);
-                }
-                
-                // Validate schedule_number format if present (support both new and legacy field names)
-                const scheduleNumber = item.schedule_number || item.application_number;
-                if (scheduleNumber && !/^\d{2}-\d{3}$/.test(scheduleNumber)) {
-                    errors.push(`Series item ${i}: Invalid schedule_number format (expected XX-XXX)`);
-                }
-                
-                // Validate item_number format if present
-                if (item.item_number && !/^\d+([A-Za-z]|\.\d+)?$/.test(item.item_number)) {
-                    errors.push(`Series item ${i}: Invalid item_number format`);
-                }
-                
-                // Validate approval_status if present
-                if (item.approval_status && !validStatuses.includes(item.approval_status)) {
-                    errors.push(`Series item ${i}: Invalid approval_status (must be one of: ${validStatuses.join(', ')})`);
-                }
-                
-                // Validate dates if present
-                if (item.dates_covered_start && !/^\d{4}(-\d{2})?(-\d{2})?$/.test(item.dates_covered_start)) {
-                    errors.push(`Series item ${i}: Invalid dates_covered_start format (expected YYYY, YYYY-MM, or YYYY-MM-DD)`);
-                }
-                
-                if (item.dates_covered_end && item.dates_covered_end !== 'present' && !/^\d{4}(-\d{2})?(-\d{2})?$/.test(item.dates_covered_end)) {
-                    errors.push(`Series item ${i}: Invalid dates_covered_end format (expected YYYY, YYYY-MM, YYYY-MM-DD, or "present")`);
-                }
-                
-                // Validate arrays (allow both arrays and strings for legacy compatibility)
-                const arrayFields = ['tags', 'media_types', 'omb_or_statute_refs', 'related_series'];
-                arrayFields.forEach(field => {
-                    if (item[field] && !Array.isArray(item[field]) && typeof item[field] !== 'string') {
-                        errors.push(`Series item ${i}: ${field} must be an array or string`);
-                    }
-                });
-            });
-        }
-        
-        return {
-            valid: errors.length === 0,
-            errors
-        };
-    }
-
-    async upsertSeries(item) {
-        // Normalize the item data
-        const normalizedItem = this.normalizeSeriesItem(item);
-        
-        // Check for existing series by natural key
-        let existingSeries = null;
-        if (normalizedItem.application_number && normalizedItem.item_number) {
-            const allSeries = await this.getAllSeries();
-            existingSeries = allSeries.find(s => 
-                s.application_number === normalizedItem.application_number && 
-                s.item_number === normalizedItem.item_number
-            );
-        }
-        
-        if (existingSeries) {
-            // Update existing series
-            const updatedItem = { ...existingSeries, ...normalizedItem };
-            const result = await this.saveSeries(updatedItem, true);
-            return { action: 'updated', series: result };
-        } else {
-            // Create new series
-            const result = await this.saveSeries(normalizedItem, false);
-            return { action: 'created', series: result };
-        }
-    }
-
-    normalizeSeriesItem(item) {
-        const normalized = { ...item };
-        
-        // Handle legacy field mappings
-        if (item.schedule_number && !normalized.application_number) {
-            normalized.application_number = item.schedule_number;
-        }
-        
-        // Ensure arrays are arrays
-        if (normalized.tags && typeof normalized.tags === 'string') {
-            normalized.tags = normalized.tags.split(';').map(t => t.trim()).filter(t => t);
-        }
-        if (normalized.media_types && typeof normalized.media_types === 'string') {
-            normalized.media_types = normalized.media_types.split(';').map(t => t.trim()).filter(t => t);
-        }
-        
-        // Handle open-ended dates
-        if (normalized.dates_covered_end === 'present' || normalized.dates_covered_end === '') {
-            normalized.dates_covered_end = null;
-            normalized.open_ended = true;
-        }
-        
-        // Calculate retention_is_permanent
-        if (normalized.retention && normalized.retention.final_disposition) {
-            normalized.retention_is_permanent = normalized.retention.final_disposition === 'permanent';
-        }
-        
-        // Remove legacy fields
-        delete normalized.schedule_number;
-        delete normalized.schedule_id;
-        delete normalized.schedule_uid;
-        
-        return normalized;
-    }
-
-    async upsertSchedule(scheduleData) {
-        // Ensure database is initialized
-        if (!this.db) {
-            await this.initDatabase();
-        }
-
-        // Normalize data
-        const schedule = {
-            schedule_number: scheduleData.schedule_number,
-            approval_status: scheduleData.approval_status.toLowerCase(),
-            approval_date: scheduleData.approval_date,
-            division: scheduleData.division,
-            notes: scheduleData.notes,
-            tags: Array.isArray(scheduleData.tags) ? scheduleData.tags : [],
-            schedule_uid: scheduleData.schedule_uid || crypto.randomUUID(),
-            updated_at: new Date().toISOString()
-        };
-
-        // Find existing schedule by schedule_uid
-        const existing = await this.db.schedules
-            .where('schedule_uid')
-            .equals(schedule.schedule_uid)
-            .first();
-
-        if (existing) {
-            schedule._id = existing._id;
-            schedule.version = (existing.version || 1) + 1;
-            schedule.created_at = existing.created_at;
-            await this.db.schedules.update(schedule._id, schedule);
-            return { action: 'updated', schedule };
-        } else {
-            schedule.created_at = new Date().toISOString();
-            schedule.version = 1;
-            const id = await this.db.schedules.add(schedule);
-            return { action: 'created', schedule: { ...schedule, _id: id } };
-        }
-    }
-
-    async findSeriesItemByScheduleAndItem(scheduleId, itemNumber) {
-        return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['series'], 'readonly');
-            const store = transaction.objectStore('series');
-            const index = store.index('application_number+item_number');
-            const request = index.get([scheduleId, itemNumber]);
-
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
-        });
-    }
-
-    async checkDuplicateItemNumber(scheduleId, itemNumber, excludeId = null) {
-        return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['series'], 'readonly');
-            const store = transaction.objectStore('series');
-            const index = store.index('application_number+item_number');
-            const request = index.get([scheduleId, itemNumber]);
-            
-            request.onsuccess = () => {
-                const duplicate = request.result;
-                // Only consider it a duplicate if it's not the same record we're editing
-                resolve(duplicate && duplicate._id !== excludeId ? duplicate : null);
-            };
-            request.onerror = () => reject(request.error);
-        });
-    }
-
-    async saveAuditEvent(auditEvent) {
-        return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['audit_events'], 'readwrite');
-            const store = transaction.objectStore('audit_events');
-            
-            const event = {
-                ...auditEvent,
-                at: auditEvent.at || new Date().toISOString()
-            };
-            
-            const request = store.add(event);
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
-        });
-    }
-
-    showImportSummary(results) {
-        // Handle merged model results structure
-        const totalSeries = (results.series?.created || 0) + (results.series?.updated || 0);
-        const totalAuditEvents = results.auditEvents?.created || 0;
-        const totalErrors = (results.series?.errors?.length || 0) + (results.auditEvents?.errors?.length || 0);
-
-        let message = `Import completed: ${totalSeries} series items (${results.series?.created || 0} new, ${results.series?.updated || 0} updated)`;
-        
-        if (totalAuditEvents > 0) {
-            message += `, ${totalAuditEvents} audit events`;
-        }
-        
-        if (totalErrors > 0) {
-            message += `. ${totalErrors} errors occurred.`;
-            ErrorHandler.log(new Error('Import validation errors'), 'Import validation', APP_CONSTANTS.ERROR_TYPES.VALIDATION);
-        }
-
-        this.setStatus(message, totalErrors > 0 ? 'warning' : 'success');
-    }
-
-    // Enhanced UX Helper Functions
-    updateChipSelection(chipContainer, selectedValue) {
-        chipContainer.querySelectorAll('.chip').forEach(chip => {
-            chip.classList.toggle('active', chip.dataset.value === selectedValue);
-        });
-    }
-
-    handleEscapeKey() {
-        // Close admin dropdown if open
-        const adminDropdown = document.getElementById('adminDropdown');
-        if (adminDropdown && !adminDropdown.classList.contains('hidden')) {
-            this.closeAdminMenu();
-            return;
-        }
-
-        // Close modals or cancel current edit
-        const modal = document.querySelector('.modal:not(.hidden)');
-        if (modal) {
-            this.hideModal();
-        } else if (this.currentSchedule || this.currentSeriesItem) {
-            if (this.currentSchedule) {
-                this.cancelScheduleEdit();
-            } else {
-                this.cancelSeriesEdit();
-            }
-        }
-    }
-
-    // Admin dropdown helpers
-    toggleAdminMenu() {
-        const dropdown = document.getElementById('adminDropdown');
-        const adminBtn = document.getElementById('adminMenuBtn');
-        
-        if (!dropdown || !adminBtn) return;
-
-        const isHidden = dropdown.classList.contains('hidden');
-        
-        if (isHidden) {
-            // Expand
-            dropdown.classList.remove('hidden');
-            adminBtn.setAttribute('aria-expanded', 'true');
-            // Focus first actionable item
-            const firstItem = dropdown.querySelector('.dropdown-item');
-            if (firstItem) {
-                setTimeout(() => firstItem.focus(), 100);
-            }
-        } else {
-            this.closeAdminMenu();
-        }
-    }
-
-    closeAdminMenu() {
-        const dropdown = document.getElementById('adminDropdown');
-        const adminBtn = document.getElementById('adminMenuBtn');
-        if (!dropdown || !adminBtn) return;
-        
-        dropdown.classList.add('hidden');
-        adminBtn.setAttribute('aria-expanded', 'false');
-        adminBtn.focus(); // Return focus to button
-    }
-
-    setupAdminMenu() {
-        const adminBtn = document.getElementById('adminMenuBtn');
-        const clearDbBtn = document.getElementById('clearDbBtn');
-        
-        if (adminBtn) {
-            adminBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                this.toggleAdminMenu();
-            });
-        }
-        
-        if (clearDbBtn) {
-            clearDbBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                this.showModal(
-                    'Clear Database',
-                    'This will permanently delete all local data (schedules, series items, and audit events). This action cannot be undone. Are you sure you want to continue?',
-                    () => this.clearDatabase()
-                );
-            });
-        }
-    }
-
-    handleGlobalClick(e) {
-        const dropdown = document.getElementById('adminDropdown');
-        const adminMenu = document.getElementById('adminMenu');
-        
-        if (!dropdown || dropdown.classList.contains('hidden')) return;
-
-        // Close if click is outside admin menu area
-        if (!adminMenu.contains(e.target)) {
-            this.closeAdminMenu();
-        }
-    }
-
-    handleSaveShortcut() {
-        // Save current form if editing
-        const scheduleForm = document.getElementById('scheduleForm');
-        const seriesForm = document.getElementById('seriesForm');
-        
-        if (scheduleForm && !scheduleForm.classList.contains('hidden')) {
-            scheduleForm.dispatchEvent(new Event('submit'));
-        } else if (seriesForm && !seriesForm.classList.contains('hidden')) {
-            seriesForm.dispatchEvent(new Event('submit'));
-        }
-    }
-
-    validateField(field) {
-        this.clearFieldError(field);
-        
-        const fieldType = field.type;
-        const fieldId = field.id;
-        const value = field.value.trim();
-        
-        // Required field validation
-        if (field.hasAttribute('required') && !value) {
-            this.showFieldError(field, 'This field is required');
-            return false;
-        }
-
-        // Date validation
-        if (fieldType === 'date' && value) {
-            const date = new Date(value);
-            if (isNaN(date.getTime())) {
-                this.showFieldError(field, 'Please enter a valid date');
-                return false;
-            }
-        }
-
-        // Year validation for coverage dates
-        if ((fieldId === 'datesCoveredStart' || fieldId === 'datesCoveredEnd') && value) {
-            if (!/^\d{4}$/.test(value) && value.toLowerCase() !== 'present') {
-                this.showFieldError(field, 'Please enter a 4-digit year or "present"');
-                return false;
-            }
-            
-            const year = parseInt(value);
-            if (!isNaN(year) && (year < 1800 || year > new Date().getFullYear() + 10)) {
-                this.showFieldError(field, 'Please enter a reasonable year');
-                return false;
-            }
-        }
-
-        // Phone number validation
-        if (fieldType === 'tel' && value) {
-            const phoneRegex = /^\(?([0-9]{3})\)?[-. ]?([0-9]{3})[-. ]?([0-9]{4})$/;
-            if (!phoneRegex.test(value)) {
-                this.showFieldError(field, 'Please enter a valid phone number (e.g., 555-123-4567)');
-                return false;
-            }
-        }
-
-        // Number validation
-        if (fieldType === 'number' && value) {
-            const num = parseFloat(value);
-            if (isNaN(num) || num < 0) {
-                this.showFieldError(field, 'Please enter a valid positive number');
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    showFieldError(field, message) {
-        field.classList.add('error');
-        
-        // Remove existing error message
-        const existingError = field.parentElement.querySelector('.form-validation-error');
-        if (existingError) {
-            existingError.remove();
-        }
-        
-        // Add new error message
-        const errorDiv = document.createElement('div');
-        errorDiv.className = 'form-validation-error';
-        errorDiv.textContent = message;
-        field.parentElement.appendChild(errorDiv);
-    }
-
-    clearFieldError(field) {
-        field.classList.remove('error');
-        const errorDiv = field.parentElement.querySelector('.form-validation-error');
-        if (errorDiv) {
-            errorDiv.remove();
-        }
-    }
-
-    validateForm(formId) {
-        const form = document.getElementById(formId);
-        if (!form) return true;
-        
-        let isValid = true;
-        const fields = form.querySelectorAll('.form-control');
-        
-        fields.forEach(field => {
-            if (!this.validateField(field)) {
-                isValid = false;
-            }
-        });
-        
-        return isValid;
-    }
-
-    // Enhanced number formatting
-    formatNumber(value, stripCommas = true) {
-        if (!value) return value;
-        
-        let numStr = value.toString();
-        if (stripCommas) {
-            numStr = numStr.replace(/,/g, '');
-        }
-        
-        const num = parseFloat(numStr);
-        return isNaN(num) ? value : num;
-    }
-
-    // Byte size display helper
-    formatBytes(bytes) {
-        if (bytes === 0) return '0 Bytes';
-        
-        const k = 1024;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-    }
-
-
-    // Quality Control Features
-
-    flagRetentionKeywords(retentionText) {
-        if (!retentionText) return [];
-        
-        const keywords = {
-            audit: ['audit', 'auditing', 'audited', 'audit hold'],
-            litigation: ['litigation', 'legal hold', 'lawsuit', 'court', 'legal action'],
-            compliance: ['compliance', 'regulatory', 'regulation', 'statute', 'law'],
-            destruction: ['destroy', 'destruction', 'dispose', 'disposal', 'shred']
-        };
-        
-        const flags = [];
-        const text = retentionText.toLowerCase();
-        
-        Object.entries(keywords).forEach(([category, terms]) => {
-            if (terms.some(term => text.includes(term))) {
-                flags.push(category);
-            }
-        });
-        
-        return flags;
-    }
-
-    calculateDataCompleteness(item) {
-        const requiredFields = ['application_number', 'item_number', 'record_series_title'];
-        const importantFields = [
-            'description', 'dates_covered_start', 'dates_covered_end', 
-            'retention_text', 'division', 'contact', 'location'
-        ];
-        const optionalFields = [
-            'arrangement', 'volume_paper_cuft', 'volume_electronic_bytes',
-            'representative_name', 'records_officer_name', 'media_types'
-        ];
-        
-        let score = 0;
-        let maxScore = 0;
-        
-        // Required fields (40% weight)
-        requiredFields.forEach(field => {
-            maxScore += 40;
-            if (item[field] && item[field].toString().trim()) {
-                score += 40;
-            }
-        });
-        
-        // Important fields (35% weight)
-        importantFields.forEach(field => {
-            maxScore += 5;
-            if (item[field] && item[field].toString().trim()) {
-                score += 5;
-            }
-        });
-        
-        // Optional fields (25% weight)
-        optionalFields.forEach(field => {
-            maxScore += 2.5;
-            if (item[field] && item[field].toString().trim()) {
-                score += 2.5;
-            }
-        });
-        
-        return Math.round((score / maxScore) * 100);
-    }
-
-    getCompletenessLevel(percentage) {
-        if (percentage >= 90) return { level: 'excellent', color: 'green' };
-        if (percentage >= 75) return { level: 'good', color: 'blue' };
-        if (percentage >= 60) return { level: 'fair', color: 'orange' };
-        return { level: 'poor', color: 'red' };
-    }
-
-    addQualityIndicators(item) {
-        const indicators = {
-            completeness: this.calculateDataCompleteness(item),
-            retentionFlags: this.flagRetentionKeywords(item.retention_text)
-        };
-        
-        return { ...item, qualityIndicators: indicators };
-    }
-
-    async showConfirmModal(title, message) {
-        return new Promise((resolve) => {
-            this.showModal(title, message, () => resolve(true), () => resolve(false));
-        });
-    }
-
-    // Reporting and Export Enhancements
-
-    async exportFilteredData() {
-        try {
-            const filteredItems = await this.getFilteredItems();
-            const allSchedules = await this.getAllSchedules();
-            const relatedScheduleIds = [...new Set(filteredItems.map(item => item.schedule_id).filter(id => id))];
-            const relatedSchedules = allSchedules.filter(schedule => relatedScheduleIds.includes(schedule._id));
-
-            const exportData = {
-                metadata: {
-                    exported_at: new Date().toISOString(),
-                    total_schedules: relatedSchedules.length,
-                    total_series_items: filteredItems.length,
-                    filters_applied: this.getActiveFilters()
-                },
-                schedules: relatedSchedules,
-                series_items: filteredItems
-            };
-
-            const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `iletsb_filtered_export_${new Date().toISOString().split('T')[0]}.json`;
-            a.click();
-            URL.revokeObjectURL(url);
-
-            this.setStatus(`Exported ${filteredItems.length} filtered items`, 'success');
-        } catch (error) {
-            ErrorHandler.log(error, 'Export filtered data', APP_CONSTANTS.ERROR_TYPES.EXPORT);
-            this.setStatus('Error exporting filtered data: ' + error.message, 'error');
-        }
-    }
-
-    async getFilteredItems() {
-        return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['series'], 'readonly');
-            const store = transaction.objectStore('series');
-            const request = store.openCursor();
-            const items = [];
-
-            request.onsuccess = (event) => {
-                const cursor = event.target.result;
-                if (cursor) {
-                    const item = { ...cursor.value, _id: cursor.key };
-                    // Use new search system instead of old filter matching
-                    items.push(item);
-                    cursor.continue();
-                } else {
-                    resolve(items);
-                }
-            };
-
-            request.onerror = () => reject(request.error);
-        });
-    }
-
-    getActiveFilters() {
-        const filters = {};
-        
-        const searchInput = document.getElementById('searchInput')?.value;
-        if (searchInput) filters.search = searchInput;
-        
-        const applicationFilter = document.getElementById('applicationFilter')?.value;
-        if (applicationFilter) filters.application = applicationFilter;
-        
-        const divisionFilter = document.getElementById('divisionFilter')?.value;
-        if (divisionFilter) filters.division = divisionFilter;
-        
-        const statusFilter = document.getElementById('statusFilter')?.value;
-        if (statusFilter) filters.status = statusFilter;
-        
-        const retentionCategoryFilter = document.getElementById('retentionCategoryFilter')?.value;
-        if (retentionCategoryFilter) filters.retentionCategory = retentionCategoryFilter;
-        
-        const approvalDateStart = document.getElementById('approvalDateStart')?.value;
-        const approvalDateEnd = document.getElementById('approvalDateEnd')?.value;
-        if (approvalDateStart || approvalDateEnd) {
-            filters.approvalDateRange = { start: approvalDateStart, end: approvalDateEnd };
-        }
-        
-        const coverageDateStart = document.getElementById('coverageDateStart')?.value;
-        const coverageDateEnd = document.getElementById('coverageDateEnd')?.value;
-        if (coverageDateStart || coverageDateEnd) {
-            filters.coverageDateRange = { start: coverageDateStart, end: coverageDateEnd };
-        }
-
-        return filters;
-    }
-
-
-    formatDateRange(startDate, endDate) {
-        if (!startDate && !endDate) return 'No dates specified';
-        if (!startDate) return `Through ${endDate}`;
-        if (!endDate) return `${startDate} - present`;
-        if (startDate === endDate) return startDate;
-        return `${startDate} - ${endDate}`;
-    }
-
+    
+    // Status management
     setStatus(message, type = 'info') {
         const statusEl = document.getElementById('statusMessage');
         if (!statusEl) return;
@@ -2652,510 +2653,50 @@ class ILETSBApp {
             }, 3000);
         }
     }
-
-    toggleSearchPane() {
-        const searchPane = document.getElementById('searchPane');
-        const mainContent = document.querySelector('.main-content');
-        const toggleBtn = document.getElementById('searchToggleBtn');
-        
-        if (!searchPane || !mainContent || !toggleBtn) return;
-        
-        const isCollapsed = searchPane.classList.contains('collapsed');
-        
-        if (isCollapsed) {
-            // Expand
-            searchPane.classList.remove('collapsed');
-            mainContent.classList.remove('search-collapsed');
-            toggleBtn.setAttribute('aria-expanded', 'true');
-        } else {
-            // Collapse
-            searchPane.classList.add('collapsed');
-            mainContent.classList.add('search-collapsed');
-            toggleBtn.setAttribute('aria-expanded', 'false');
-        }
-        
-        // Store preference in localStorage (guarded)
-        try {
-            localStorage.setItem('iletsb_search_pane_collapsed', String(!isCollapsed));
-        } catch (e) {
-            // Ignore storage errors; toggling should still work without persistence
-        }
-    }
-
-    restoreSearchPaneState() {
-        let isCollapsed = false;
-        try {
-            isCollapsed = localStorage.getItem('iletsb_search_pane_collapsed') === 'true';
-        } catch (e) {
-            // If storage is unavailable, default to expanded
-            isCollapsed = false;
-        }
-        
-        const searchPane = document.getElementById('searchPane');
-        const mainContent = document.querySelector('.main-content');
-        const toggleBtn = document.getElementById('searchToggleBtn');
-        
-        if (!searchPane || !mainContent || !toggleBtn) return;
-        
-        if (isCollapsed) {
-            searchPane.classList.add('collapsed');
-            mainContent.classList.add('search-collapsed');
-            toggleBtn.setAttribute('aria-expanded', 'false');
-        } else {
-            searchPane.classList.remove('collapsed');
-            mainContent.classList.remove('search-collapsed');
-            toggleBtn.setAttribute('aria-expanded', 'true');
-        }
-    }
-
-    handleKeydown(event) {
-        if (event.key === 'Escape') {
-            const modal = document.getElementById('confirmModal');
-            if (modal && !modal.classList.contains('hidden')) {
-                this.hideModal();
-                return;
-            }
-            
-            // Cancel current edit
-            const scheduleForm = document.getElementById('scheduleForm');
-            const seriesForm = document.getElementById('seriesForm');
-            
-            if (scheduleForm && !scheduleForm.classList.contains('hidden')) {
-                this.cancelScheduleEdit();
-            } else if (seriesForm && !seriesForm.classList.contains('hidden')) {
-                this.cancelSeriesEdit();
-            }
-        }
-    }
-
-    // Import Status Management
-    showImportStatus() {
-        document.getElementById('importStatusModal').classList.remove('hidden');
-    }
-
-    hideImportStatus() {
-        document.getElementById('importStatusModal').classList.add('hidden');
-    }
-
-    updateImportStatus(status) {
-        document.getElementById('importStatusCode').textContent = status;
-    }
-
-    updateImportCounts(schedules, series) {
-        document.getElementById('importSchedulesCount').textContent = schedules;
-        document.getElementById('importSeriesCount').textContent = series;
-    }
-
-    logImportMessage(message) {
-        const log = document.getElementById('importStatusLog');
-        log.value += `[${new Date().toLocaleTimeString()}] ${message}\n`;
-        log.scrollTop = log.scrollHeight;
-    }
-
-    clearImportLog() {
-        document.getElementById('importStatusLog').value = '';
-    }
-
-    // Modal Management
-    showModal(title, message, onConfirm, onCancel) {
-        const modal = document.getElementById('confirmModal');
-        const titleEl = document.getElementById('confirmTitle');
-        const messageEl = document.getElementById('confirmMessage');
-        const confirmBtn = document.getElementById('confirmBtn');
-        const cancelBtn = document.getElementById('cancelBtn');
-        
-        if (!modal || !titleEl || !messageEl || !confirmBtn || !cancelBtn) {
-            console.error('Modal elements not found');
-            return;
-        }
-        
-        titleEl.textContent = title;
-        messageEl.textContent = message;
-        
-        // Store callbacks for later use
-        this.modalCallbacks = { onConfirm, onCancel };
-        
-        modal.classList.remove('hidden');
-        confirmBtn.focus();
-    }
-
-    hideModal() {
-        const modal = document.getElementById('confirmModal');
-        if (modal) {
-            modal.classList.add('hidden');
-        }
-        this.modalCallbacks = null;
-    }
-
-    handleConfirm() {
-        if (this.modalCallbacks && this.modalCallbacks.onConfirm) {
-            this.modalCallbacks.onConfirm();
-        }
-        this.hideModal();
-    }
-
-    handleCancel() {
-        if (this.modalCallbacks && this.modalCallbacks.onCancel) {
-            this.modalCallbacks.onCancel();
-        }
-        this.hideModal();
-    }
-
-    confirmDeleteSchedule() {
-        const scheduleNumber = document.getElementById('seriesScheduleNumber')?.value?.trim();
-        if (!scheduleNumber) {
-            this.setStatus('No schedule selected for deletion', 'error');
-            return;
-        }
-        
-        this.showModal(
-            'Delete Schedule Assignment',
-            `This will remove the schedule assignment "${scheduleNumber}" from all associated series records. This action cannot be undone. Are you sure you want to continue?`,
-            async () => {
-                try {
-                    await this.deleteSchedule(`sched_${scheduleNumber}`);
-                    this.setStatus('Schedule assignment removed successfully', 'success');
-                    this.cancelSeriesEdit();
-                    this.updateUI();
-                } catch (error) {
-                    ErrorHandler.log(error, 'Delete schedule assignment');
-                    this.setStatus('Failed to remove schedule assignment', 'error');
-                }
-            }
-        );
-    }
-
-    confirmDeleteSeriesItem() {
-        const selectedId = this.selectedItemId;
-        if (!selectedId) {
-            this.setStatus('No series record selected for deletion', 'error');
-            return;
-        }
-        
-        const seriesTitle = document.getElementById('recordSeriesTitle')?.value?.trim() || 'this series record';
-        
-        this.showModal(
-            'Delete Series Record',
-            `This will permanently delete "${seriesTitle}". This action cannot be undone. Are you sure you want to continue?`,
-            async () => {
-                try {
-                    await this.deleteSeries(selectedId);
-                    this.setStatus('Series record deleted successfully', 'success');
-                    this.cancelSeriesEdit();
-                    this.updateUI();
-                } catch (error) {
-                    ErrorHandler.log(error, 'Delete series record');
-                    this.setStatus('Failed to delete series record', 'error');
-                }
-            }
-        );
-    }
-
-    async clearDatabase() {
-        // Prevent concurrent executions
-        if (this._clearingDatabase) {
-            console.warn('Database clear already in progress, ignoring duplicate request');
-            return;
-        }
-        
-        this._clearingDatabase = true;
-        
-        try {
-            this.setStatus('Clearing database...', 'info');
-            
-            if (!this.db) {
-                await this.initDatabase();
-            }
-
-            // Clear all object stores
-            const transaction = this.db.transaction(['series', 'audit_events'], 'readwrite');
-            
-            const seriesStore = transaction.objectStore('series');
-            const auditStore = transaction.objectStore('audit_events');
-            
-            await Promise.all([
-                new Promise((resolve, reject) => {
-                    const request = seriesStore.clear();
-                    request.onsuccess = () => resolve();
-                    request.onerror = () => reject(request.error);
-                }),
-                new Promise((resolve, reject) => {
-                    const request = auditStore.clear();
-                    request.onsuccess = () => resolve();
-                    request.onerror = () => reject(request.error);
-                })
-            ]);
-
-            // Clear localStorage errors as well
-            localStorage.removeItem('iletsb_errors');
-            
-            // Refresh the UI
-            await this.loadDataOptimized();
-            this.updateStatusBar();
-            
-            // Show success message
-            this.setStatus('Database cleared successfully', 'success');
-            
-        } catch (error) {
-            ErrorHandler.log(error, 'Clear Database', APP_CONSTANTS.ERROR_TYPES.DATABASE);
-            this.setStatus('Failed to clear database', 'error');
-        } finally {
-            // Always reset the flag
-            this._clearingDatabase = false;
-        }
-    }
-
-    setupImportStatusModal() {
-        const closeBtn = document.getElementById('closeImportStatus');
-        const closeFooterBtn = document.getElementById('importStatusCloseBtn');
-        const modal = document.getElementById('importStatusModal');
-        
-        if (closeBtn) {
-            closeBtn.addEventListener('click', () => this.hideImportStatus());
-        }
-        
-        if (closeFooterBtn) {
-            closeFooterBtn.addEventListener('click', () => this.hideImportStatus());
-        }
-        
-        // Close modal when clicking outside of it
-        if (modal) {
-            modal.addEventListener('click', (e) => {
-                if (e.target === modal) {
-                    this.hideImportStatus();
-                }
-            });
-        }
-        
-        // Handle Escape key to close modal
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && modal && !modal.classList.contains('hidden')) {
-                this.hideImportStatus();
-            }
-        });
-    }
-
-    // v3.1 Save/Load Adapters
     
-    // Helper function to convert input to array
-    toArr(input) {
-        if (Array.isArray(input)) return input;
-        if (!input) return [];
-        return String(input).split(/[,;\n]/).map(s => s.trim()).filter(Boolean);
-    }
-
-    // Collect all form values and save as series record
-    async saveSeriesFromForms() {
-        try {
-            // Read schedule number from Series Details tab input
-            const schedule_number = document.getElementById('seriesScheduleNumber')?.value?.trim() || null;
-            const approval_status = document.getElementById('approvalStatus')?.value || null;
-            const approval_date = document.getElementById('approvalDate')?.value || null;
-            const division = document.getElementById('scheduleDivision')?.value?.trim() || null;
-            const tags = this.toArr(document.getElementById('scheduleTags')?.value);
-
-            // Read Series Details
-            const item_number = document.getElementById('itemNumber')?.value?.trim() || null;
-            const record_series_title = document.getElementById('seriesTitle')?.value?.trim() || null;
-            const dates_covered_start = document.getElementById('datesStart')?.value?.trim() || null;
-            const dates_covered_end = document.getElementById('datesEnd')?.value?.trim() || null;
-            const retention_text = document.getElementById('retentionText')?.value || null;
-            const notes = document.getElementById('seriesNotes')?.value || null;
-
-            const media_types = this.toArr(document.getElementById('mediaTypes')?.value);
-            const omb_or_statute_refs = this.toArr(document.getElementById('ombStatuteRefs')?.value);
-            const related_series = this.toArr(document.getElementById('relatedSeries')?.value);
-
-            // Everything else goes into ui_extras (captured verbatim)
-            const ui_extras = {
-                seriesDescription: document.getElementById('seriesDescription')?.value || null,
-                seriesContact: document.getElementById('seriesContact')?.value || null,
-                seriesLocation: document.getElementById('seriesLocation')?.value || null,
-                retentionTerm: document.getElementById('retentionTerm')?.value || null,
-                retentionTrigger: document.getElementById('retentionTrigger')?.value || null,
-                volumePaper: document.getElementById('volumePaper')?.value || null,
-                volumeElectronic: document.getElementById('volumeElectronic')?.value || null,
-                annualPaper: document.getElementById('annualPaper')?.value || null,
-                annualElectronic: document.getElementById('annualElectronic')?.value || null,
-                arrangement: document.getElementById('arrangement')?.value || null,
-                electronicStandard: document.getElementById('electronicStandard')?.value || null,
-                numberSizeFiles: document.getElementById('numberSizeFiles')?.value || null,
-                indexFindingAids: document.getElementById('indexFindingAids')?.value || null,
-                representativeName: document.getElementById('representativeName')?.value || null,
-                representativeTitle: document.getElementById('representativeTitle')?.value || null,
-                representativePhone: document.getElementById('representativePhone')?.value || null,
-                recordsOfficerName: document.getElementById('recordsOfficerName')?.value || null,
-                recordsOfficerPhone: document.getElementById('recordsOfficerPhone')?.value || null,
-                scheduleNotes: document.getElementById('scheduleNotes')?.value || null
-            };
-
-            const now = new Date().toISOString();
-            const row = {
-                schedule_number, item_number, record_series_title,
-                division, approval_status, approval_date,
-                dates_covered_start, dates_covered_end,
-                tags, media_types, omb_or_statute_refs, related_series,
-                retention_text, notes, ui_extras,
-                updated_at: now
-            };
-
-            // Check if we're updating an existing record
-            if (this.currentSeriesItem && this.currentSeriesItem._id) {
-                // Update existing record
-                row._id = this.currentSeriesItem._id;
-                row.created_at = this.currentSeriesItem.created_at || now;
-                row.version = (this.currentSeriesItem.version || 0) + 1;
-                await this.saveSeries(row, true);
-                await this.logAuditEvent('series', row._id, 'update', row);
-            } else {
-                // Create new record
-                row.created_at = now;
-                row.version = 1;
-                const savedItem = await this.saveSeries(row, false);
-                await this.logAuditEvent('series', savedItem._id, 'create', row);
-            }
-
-            // Refresh UI
-            await this.updateUI();
-            this.setStatus('Series saved successfully', 'success');
-            
-        } catch (error) {
-            ErrorHandler.log(error, 'Save series from forms');
-            this.setStatus('Error saving series: ' + error.message, 'error');
+    // UI helper methods that may be missing
+    hideDetails() {
+        const noSelectionMessage = document.getElementById('noSelectionMessage');
+        const tabNavigation = document.getElementById('tabNavigation');
+        const seriesTabPanel = document.getElementById('seriesTabPanel');
+        const scheduleTabPanel = document.getElementById('scheduleTabPanel');
+        
+        if (noSelectionMessage) {
+            noSelectionMessage.classList.remove('hidden');
+        }
+        
+        if (tabNavigation) {
+            tabNavigation.classList.add('hidden');
+        }
+        
+        if (seriesTabPanel) {
+            seriesTabPanel.classList.add('hidden');
+        }
+        
+        if (scheduleTabPanel) {
+            scheduleTabPanel.classList.add('hidden');
         }
     }
-
-    // Find series by schedule_number and item_number combination
-    async findSeriesByScheduleAndItem(scheduleNumber, itemNumber) {
-        return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['series'], 'readonly');
-            const store = transaction.objectStore('series');
-            const index = store.index('schedule_number_item_number');
-            const request = index.get([scheduleNumber, itemNumber]);
-            
-            request.onsuccess = () => resolve(request.result || null);
-            request.onerror = () => reject(request.error);
-        });
-    }
-
-    // Save series as new record (always creates new, never updates)
-    async saveSeriesAsNew() {
-        try {
-            // Read schedule number from Series Details tab input
-            const schedule_number = document.getElementById('seriesScheduleNumber')?.value?.trim() || null;
-            const approval_status = document.getElementById('approvalStatus')?.value || null;
-            const approval_date = document.getElementById('approvalDate')?.value || null;
-            const division = document.getElementById('scheduleDivision')?.value?.trim() || null;
-            const tags = this.toArr(document.getElementById('scheduleTags')?.value);
-
-            // Read Series Details
-            const item_number = document.getElementById('itemNumber')?.value?.trim() || null;
-            const record_series_title = document.getElementById('seriesTitle')?.value?.trim() || null;
-            const dates_covered_start = document.getElementById('datesStart')?.value?.trim() || null;
-            const dates_covered_end = document.getElementById('datesEnd')?.value?.trim() || null;
-            const retention_text = document.getElementById('retentionText')?.value || null;
-            const notes = document.getElementById('seriesNotes')?.value || null;
-
-            const media_types = this.toArr(document.getElementById('mediaTypes')?.value);
-            const omb_or_statute_refs = this.toArr(document.getElementById('ombStatuteRefs')?.value);
-            const related_series = this.toArr(document.getElementById('relatedSeries')?.value);
-
-            // Everything else goes into ui_extras (captured verbatim)
-            const ui_extras = {
-                seriesDescription: document.getElementById('seriesDescription')?.value || null,
-                seriesContact: document.getElementById('seriesContact')?.value || null,
-                seriesLocation: document.getElementById('seriesLocation')?.value || null,
-                retentionTerm: document.getElementById('retentionTerm')?.value || null,
-                retentionTrigger: document.getElementById('retentionTrigger')?.value || null,
-                volumePaper: document.getElementById('volumePaper')?.value || null,
-                volumeElectronic: document.getElementById('volumeElectronic')?.value || null,
-                annualPaper: document.getElementById('annualPaper')?.value || null,
-                annualElectronic: document.getElementById('annualElectronic')?.value || null,
-                arrangement: document.getElementById('arrangement')?.value || null,
-                electronicStandard: document.getElementById('electronicStandard')?.value || null,
-                numberSizeFiles: document.getElementById('numberSizeFiles')?.value || null,
-                indexFindingAids: document.getElementById('indexFindingAids')?.value || null,
-                representativeName: document.getElementById('representativeName')?.value || null,
-                representativeTitle: document.getElementById('representativeTitle')?.value || null,
-                representativePhone: document.getElementById('representativePhone')?.value || null,
-                recordsOfficerName: document.getElementById('recordsOfficerName')?.value || null,
-                recordsOfficerPhone: document.getElementById('recordsOfficerPhone')?.value || null,
-                scheduleNotes: document.getElementById('scheduleNotes')?.value || null
-            };
-
-            const now = new Date().toISOString();
-            const row = {
-                schedule_number, item_number, record_series_title,
-                division, approval_status, approval_date,
-                dates_covered_start, dates_covered_end,
-                tags, media_types, omb_or_statute_refs, related_series,
-                retention_text, notes, ui_extras,
-                created_at: now,
-                updated_at: now,
-                version: 1
-            };
-
-            // Always create new record
-            const savedItem = await this.saveSeries(row, false);
-            await this.logAuditEvent('series', savedItem._id, 'create', row);
-
-            // Refresh UI
-            await this.updateUI();
-            this.setStatus('New series record created successfully', 'success');
-            
-        } catch (error) {
-            ErrorHandler.log(error, 'Save series as new');
-            this.setStatus('Error creating new series: ' + error.message, 'error');
-            throw error;
+    
+    showBulkUpdateProgress(recordCount) {
+        // Show progress indicator in status bar
+        this.setStatus(`Bulk update in progress: updating ${recordCount} series records...`, 'info');
+        
+        // Add loading class to form for visual feedback
+        const form = document.getElementById('scheduleForm');
+        if (form) {
+            form.classList.add('loading');
         }
     }
-
-    // Load series data into forms (reverse mapping)
-    populateFormsFromSeries(seriesItem) {
-        if (!seriesItem) return;
-
-        try {
-            // Populate Schedule Details
-            this.setFormValue('scheduleNum', seriesItem.schedule_number);
-            this.setFormValue('approvalStatus', seriesItem.approval_status);
-            this.setFormValue('approvalDate', seriesItem.approval_date);
-            this.setFormValue('scheduleDivision', seriesItem.division);
-            this.setFormValue('scheduleTags', Array.isArray(seriesItem.tags) ? seriesItem.tags.join(', ') : '');
-
-            // Populate Series Details
-            this.setFormValue('seriesScheduleNumber', seriesItem.schedule_number);
-            this.setFormValue('itemNumber', seriesItem.item_number);
-            this.setFormValue('seriesTitle', seriesItem.record_series_title);
-            this.setFormValue('datesStart', seriesItem.dates_covered_start);
-            this.setFormValue('datesEnd', seriesItem.dates_covered_end);
-            this.setFormValue('retentionText', seriesItem.retention_text);
-            this.setFormValue('seriesNotes', seriesItem.notes);
-
-            this.setFormValue('mediaTypes', Array.isArray(seriesItem.media_types) ? seriesItem.media_types.join(', ') : '');
-            this.setFormValue('ombStatuteRefs', Array.isArray(seriesItem.omb_or_statute_refs) ? seriesItem.omb_or_statute_refs.join(', ') : '');
-            this.setFormValue('relatedSeries', Array.isArray(seriesItem.related_series) ? seriesItem.related_series.join(', ') : '');
-
-            // Populate ui_extras fields
-            if (seriesItem.ui_extras) {
-                Object.keys(seriesItem.ui_extras).forEach(key => {
-                    this.setFormValue(key, seriesItem.ui_extras[key]);
-                });
-            }
-
-        } catch (error) {
-            ErrorHandler.log(error, 'Populate forms from series');
+    
+    hideBulkUpdateProgress() {
+        // Remove loading class from form
+        const form = document.getElementById('scheduleForm');
+        if (form) {
+            form.classList.remove('loading');
         }
     }
-
-    // Helper to safely set form field values
-    setFormValue(fieldId, value) {
-        const field = document.getElementById(fieldId);
-        if (field && value !== null && value !== undefined) {
-            field.value = value;
-        }
-    }
-
-    // Update status bar and import modal counts
+    
     async refreshCountsUI() {
         try {
             const totalSeries = await this.getSeriesItemsCount();
@@ -3181,95 +2722,39 @@ class ILETSBApp {
             ErrorHandler.log(error, 'Refresh counts UI');
         }
     }
-
-    // Validation functions
-    validateScheduleNumber(scheduleNumber) {
-        if (!scheduleNumber) return true; // Optional field
-        return /^\d{2}-\d{3}$/.test(scheduleNumber);
-    }
-
-    validateItemNumber(itemNumber) {
-        if (!itemNumber) return true; // Optional field
-        return /^\d+([A-Za-z]|\.\d+)?$/.test(itemNumber);
-    }
-
-    // v3.1 Import upsert method
-    async upsertSeriesV31(importItem) {
+    
+    restoreSearchPaneState() {
+        // Restore search pane state from localStorage if available
+        let isCollapsed = false;
         try {
-            // Normalize arrays from import data
-            const normalizeArray = (value) => {
-                if (Array.isArray(value)) return value;
-                if (!value) return [];
-                return String(value).split(/[,;\n]/).map(s => s.trim()).filter(Boolean);
-            };
-
-            // Prepare the series record
-            const now = new Date().toISOString();
-            const seriesRecord = {
-                schedule_number: importItem.schedule_number || null,
-                item_number: importItem.item_number || null,
-                record_series_title: importItem.record_series_title || null,
-                division: importItem.division || null,
-                approval_status: importItem.approval_status || null,
-                approval_date: importItem.approval_date || null,
-                dates_covered_start: importItem.dates_covered_start || null,
-                dates_covered_end: importItem.dates_covered_end || null,
-                tags: normalizeArray(importItem.tags),
-                media_types: normalizeArray(importItem.media_types),
-                omb_or_statute_refs: normalizeArray(importItem.omb_or_statute_refs),
-                related_series: normalizeArray(importItem.related_series),
-                retention_text: importItem.retention_text || null,
-                notes: importItem.notes || null,
-                ui_extras: importItem.ui_extras || {},
-                updated_at: now
-            };
-
-            // Preserve timestamps if they exist
-            if (importItem.created_at) {
-                seriesRecord.created_at = importItem.created_at;
-            }
-            if (importItem.version) {
-                seriesRecord.version = importItem.version;
-            }
-
-            // Upsert logic: find existing by [schedule_number+item_number] when both present
-            let existing = null;
-            if (seriesRecord.schedule_number && seriesRecord.item_number) {
-                existing = await this.findSeriesByScheduleAndItem(seriesRecord.schedule_number, seriesRecord.item_number);
-            }
-
-            if (existing) {
-                // Update existing record
-                seriesRecord._id = existing._id;
-                seriesRecord.created_at = existing.created_at || now;
-                seriesRecord.version = (existing.version || 0) + 1;
-                const updatedSeries = await this.saveSeries(seriesRecord, true);
-                return { action: 'updated', record: updatedSeries };
-            } else {
-                // Create new record
-                seriesRecord.created_at = now;
-                seriesRecord.version = 1;
-                const newSeries = await this.saveSeries(seriesRecord, false);
-                return { action: 'created', record: newSeries };
-            }
-
-        } catch (error) {
-            throw new Error(`Failed to upsert series: ${error.message}`);
+            isCollapsed = localStorage.getItem('iletsb_search_pane_collapsed') === 'true';
+        } catch (e) {
+            // If storage is unavailable, default to expanded
+            isCollapsed = false;
+        }
+        
+        const searchPane = document.getElementById('searchPane');
+        const mainContent = document.querySelector('.main-content');
+        const toggleBtn = document.getElementById('searchToggleBtn');
+        
+        if (!searchPane || !mainContent || !toggleBtn) return;
+        
+        if (isCollapsed) {
+            searchPane.classList.add('collapsed');
+            mainContent.classList.add('search-collapsed');
+            toggleBtn.setAttribute('aria-expanded', 'false');
+        } else {
+            searchPane.classList.remove('collapsed');
+            mainContent.classList.remove('search-collapsed');
+            toggleBtn.setAttribute('aria-expanded', 'true');
         }
     }
 }
 
-// Global error handlers
-window.addEventListener('unhandledrejection', (event) => {
-    ErrorHandler.log(event.reason, 'Unhandled Promise Rejection', APP_CONSTANTS.ERROR_TYPES.DATABASE);
-    event.preventDefault(); // Prevent default browser error handling
-});
-
-window.addEventListener('error', (event) => {
-    ErrorHandler.log(event.error || event.message || 'Unknown error', 'Global Error', APP_CONSTANTS.ERROR_TYPES.DATABASE);
-});
-
 // Initialize the application when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
-    new ILETSBApp();
+    const app = new ILETSBApp();
+    
+    // Setup form event handlers after app initialization
+    app.setupFormEventHandlers();
 });
