@@ -26,8 +26,6 @@
                         <button class="dropdown-item" id="exportBtn" role="menuitem">Export JSON</button>
                         <button class="dropdown-item" id="importBtn" role="menuitem">Import JSON</button>
                         <hr class="dropdown-sep" aria-hidden="true">
-                        <button class="dropdown-item" id="exportFilteredBtn" role="menuitem">Export Filtered</button>
-                        <hr class="dropdown-sep" aria-hidden="true">
                         <button class="dropdown-item danger" id="clearDbBtn" role="menuitem" aria-describedby="clearDbDesc">Clear DB</button>
                         <span id="clearDbDesc" class="sr-only">Removes all schedules, series items, and audit logs from this browser.</span>
                     </div>
@@ -86,39 +84,6 @@
                         </select>
                     </div>
 
-                    <div class="form-group">
-                        <label class="form-label">Retention Type</label>
-                        <div class="checkbox-group">
-                        </div>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="retentionCategoryFilter" class="form-label">Retention Category</label>
-                        <select id="retentionCategoryFilter" class="form-control" aria-label="Filter by retention category">
-                            <option value="">All Categories</option>
-                            <option value="permanent">Permanent</option>
-                            <option value="time-limited">Time-Limited</option>
-                            <option value="unknown">Unknown</option>
-                        </select>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Approval Date Range</label>
-                        <div class="date-range">
-                            <input type="date" id="approvalDateStart" class="form-control" placeholder="Start date">
-                            <span class="date-separator">to</span>
-                            <input type="date" id="approvalDateEnd" class="form-control" placeholder="End date">
-                        </div>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Coverage Date Range</label>
-                        <div class="date-range">
-                            <input type="text" id="coverageDateStart" class="form-control" placeholder="Start year (YYYY)">
-                            <span class="date-separator">to</span>
-                            <input type="text" id="coverageDateEnd" class="form-control" placeholder="End year (YYYY)">
-                        </div>
-                    </div>
 
                     <div class="form-group">
                         <button class="btn btn--secondary btn--sm btn--full-width" id="clearFiltersBtn">
@@ -274,11 +239,6 @@
                                     <div class="form-group">
                                         <label for="volumeElectronic" class="form-label">Electronic Volume</label>
                                         <input type="text" id="volumeElectronic" class="form-control" data-field="ui_extras.volumeElectronic">
-                                        <div class="byte-converter">
-                                            <button type="button" class="converter-btn" data-unit="KB">KB</button>
-                                            <button type="button" class="converter-btn" data-unit="MB">MB</button>
-                                            <button type="button" class="converter-btn" data-unit="GB">GB</button>
-                                        </div>
                                     </div>
                                 </div>
 
@@ -290,11 +250,6 @@
                                     <div class="form-group">
                                         <label for="annualElectronic" class="form-label">Annual Accum. Electronic</label>
                                         <input type="text" id="annualElectronic" class="form-control" data-field="ui_extras.annualElectronic">
-                                        <div class="byte-converter">
-                                            <button type="button" class="converter-btn" data-unit="KB">KB</button>
-                                            <button type="button" class="converter-btn" data-unit="MB">MB</button>
-                                            <button type="button" class="converter-btn" data-unit="GB">GB</button>
-                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -380,7 +335,6 @@
 
                             <div class="form-actions">
                                 <button type="submit" class="btn btn--primary">Save Series Item</button>
-                                <button type="button" class="btn btn--secondary" id="saveAsNewBtn">Save as New Records Category</button>
                                 <button type="button" class="btn btn--secondary" id="cloneRecordBtn">Clone Record</button>
                                 <button type="button" class="btn btn--outline" id="cancelSeriesBtn">Cancel</button>
                                 <button type="button" class="btn btn--outline delete-btn hidden" id="deleteSeriesBtn">Delete</button>

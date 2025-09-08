@@ -723,18 +723,6 @@ class ILETSBApp {
             return false;
         }
         
-        // Date range filters
-        if (criteria.approvalDateStart || criteria.approvalDateEnd) {
-            if (!this.isDateInRange(item.approval_date, criteria.approvalDateStart, criteria.approvalDateEnd)) {
-                return false;
-            }
-        }
-        
-        if (criteria.coverageDateStart || criteria.coverageDateEnd) {
-            if (!this.isCoverageDateInRange(item, criteria.coverageDateStart, criteria.coverageDateEnd)) {
-                return false;
-            }
-        }
         
         // Tag filter
         if (criteria.tags && criteria.tags.length > 0) {
@@ -798,36 +786,6 @@ class ILETSBApp {
         return yearMatch ? yearMatch[1] : '0000';
     }
 
-    isDateInRange(dateStr, startDate, endDate) {
-        if (!dateStr) return !startDate && !endDate;
-        
-        const year = this.extractYear(dateStr);
-        if (!year) return false;
-        
-        if (startDate && year < parseInt(startDate)) return false;
-        if (endDate && year > parseInt(endDate)) return false;
-        
-        return true;
-    }
-
-    isCoverageDateInRange(item, startDate, endDate) {
-        const startYear = this.extractYear(item.dates_covered_start);
-        const endYear = this.extractYear(item.dates_covered_end);
-        
-        if (startDate) {
-            const filterStart = parseInt(startDate);
-            if (startYear && startYear > filterStart) return false;
-            if (!startYear && endYear && endYear < filterStart) return false;
-        }
-        
-        if (endDate) {
-            const filterEnd = parseInt(endDate);
-            if (endYear && endYear !== 9999 && endYear < filterEnd) return false;
-            if (!endYear && startYear && startYear > filterEnd) return false;
-        }
-        
-        return true;
-    }
 
     // Bulk Update UI Feedback Methods
     showBulkUpdateProgress(recordCount) {
@@ -895,10 +853,6 @@ class ILETSBApp {
         document.getElementById('scheduleFilter').addEventListener('change', () => this.applyFilters());
         document.getElementById('divisionFilter').addEventListener('change', () => this.applyFilters());
         document.getElementById('statusFilter').addEventListener('change', () => this.applyFilters());
-        document.getElementById('approvalDateStart').addEventListener('change', () => this.applyFilters());
-        document.getElementById('approvalDateEnd').addEventListener('change', () => this.applyFilters());
-        document.getElementById('coverageDateStart').addEventListener('input', () => this.debounceSearch());
-        document.getElementById('coverageDateEnd').addEventListener('input', () => this.debounceSearch());
         document.getElementById('clearFiltersBtn').addEventListener('click', () => this.clearFilters());
         document.getElementById('sortBy').addEventListener('change', () => this.applyFilters());
 
@@ -917,9 +871,7 @@ class ILETSBApp {
             console.error('seriesForm element not found during event listener setup');
         }
         
-        // Save as New button
-        document.getElementById('saveAsNewBtn').addEventListener('click', (e) => this.handleSaveAsNew(e));
-        
+        // Cancel buttons
         document.getElementById('cancelScheduleBtn').addEventListener('click', () => this.cancelScheduleEdit());
         document.getElementById('cancelSeriesBtn').addEventListener('click', () => this.cancelSeriesEdit());
         document.getElementById('deleteScheduleBtn').addEventListener('click', () => this.confirmDeleteSchedule());
@@ -1764,26 +1716,6 @@ class ILETSBApp {
             criteria.approvalStatus = statusFilter.value;
         }
         
-        // Date range filters
-        const approvalDateStart = document.getElementById('approvalDateStart');
-        if (approvalDateStart?.value) {
-            criteria.approvalDateStart = approvalDateStart.value;
-        }
-        
-        const approvalDateEnd = document.getElementById('approvalDateEnd');
-        if (approvalDateEnd?.value) {
-            criteria.approvalDateEnd = approvalDateEnd.value;
-        }
-        
-        const coverageDateStart = document.getElementById('coverageDateStart');
-        if (coverageDateStart?.value) {
-            criteria.coverageDateStart = coverageDateStart.value;
-        }
-        
-        const coverageDateEnd = document.getElementById('coverageDateEnd');
-        if (coverageDateEnd?.value) {
-            criteria.coverageDateEnd = coverageDateEnd.value;
-        }
         
         // Tag filter (if implemented in UI)
         const tagFilter = document.getElementById('tagFilter');
@@ -1815,14 +1747,6 @@ class ILETSBApp {
         if (criteria.scheduleNumber) activeFilters.push(`Schedule: ${criteria.scheduleNumber}`);
         if (criteria.division) activeFilters.push(`Division: ${criteria.division}`);
         if (criteria.approvalStatus) activeFilters.push(`Status: ${criteria.approvalStatus}`);
-        if (criteria.approvalDateStart || criteria.approvalDateEnd) {
-            const dateRange = `${criteria.approvalDateStart || 'start'} - ${criteria.approvalDateEnd || 'end'}`;
-            activeFilters.push(`Approval: ${dateRange}`);
-        }
-        if (criteria.coverageDateStart || criteria.coverageDateEnd) {
-            const dateRange = `${criteria.coverageDateStart || 'start'} - ${criteria.coverageDateEnd || 'end'}`;
-            activeFilters.push(`Coverage: ${dateRange}`);
-        }
         
         summary.textContent = activeFilters.length > 0 
             ? `Active filters: ${activeFilters.join(', ')}`
@@ -1831,9 +1755,7 @@ class ILETSBApp {
 
     clearFilters() {
         const elements = [
-            'searchInput', 'scheduleFilter', 'divisionFilter', 
-            'statusFilter', 'retentionCategoryFilter',
-            'approvalDateStart', 'approvalDateEnd', 'coverageDateStart', 'coverageDateEnd'
+            'searchInput', 'scheduleFilter', 'divisionFilter', 'statusFilter'
         ];
         
         elements.forEach(id => {
@@ -2377,7 +2299,7 @@ class ILETSBApp {
         event.preventDefault();
         
         try {
-            const form = event.target;
+            const form = document.getElementById('scheduleForm');
             const scheduleNumber = document.getElementById('scheduleNum').textContent;
             if (scheduleNumber === 'Not assigned') {
                 throw new Error('Cannot save schedule without a schedule number');
@@ -2565,18 +2487,6 @@ class ILETSBApp {
             scheduleForm.addEventListener('submit', (e) => this.handleScheduleFormSubmit(e));
         }
         
-        // Clone record button
-        const cloneBtn = document.getElementById('cloneRecordBtn');
-        if (cloneBtn) {
-            cloneBtn.addEventListener('click', () => this.cloneCurrentRecord());
-        }
-        
-        // Save as new button
-        const saveAsNewBtn = document.getElementById('saveAsNewBtn');
-        if (saveAsNewBtn) {
-            saveAsNewBtn.addEventListener('click', (e) => this.handleSaveAsNew(e));
-        }
-        
         // Cancel buttons
         const cancelSeriesBtn = document.getElementById('cancelSeriesBtn');
         if (cancelSeriesBtn) {
@@ -2661,23 +2571,49 @@ class ILETSBApp {
         const seriesTabPanel = document.getElementById('seriesTabPanel');
         const scheduleTabPanel = document.getElementById('scheduleTabPanel');
         
+        // Show no selection message
         if (noSelectionMessage) {
             noSelectionMessage.classList.remove('hidden');
         }
         
-        if (tabNavigation) {
-            tabNavigation.classList.add('hidden');
-        }
+        // Hide tab navigation and panels
+        if (tabNavigation) tabNavigation.classList.add('hidden');
+        if (seriesTabPanel) seriesTabPanel.classList.add('hidden');
+        if (scheduleTabPanel) scheduleTabPanel.classList.add('hidden');
         
-        if (seriesTabPanel) {
-            seriesTabPanel.classList.add('hidden');
-        }
-        
-        if (scheduleTabPanel) {
-            scheduleTabPanel.classList.add('hidden');
-        }
+        // Reset forms
+        const scheduleForm = document.getElementById('scheduleForm');
+        const seriesForm = document.getElementById('seriesForm');
+        if (scheduleForm) scheduleForm.reset();
+        if (seriesForm) seriesForm.reset();
     }
-    
+
+    // Removed saveAsNewBtn conditional event listener
+
+    // UI helper methods that may be missing
+    hideDetails() {
+        const noSelectionMessage = document.getElementById('noSelectionMessage');
+        const tabNavigation = document.getElementById('tabNavigation');
+        const seriesTabPanel = document.getElementById('seriesTabPanel');
+        const scheduleTabPanel = document.getElementById('scheduleTabPanel');
+        
+        // Show no selection message
+        if (noSelectionMessage) {
+            noSelectionMessage.classList.remove('hidden');
+        }
+        
+        // Hide tab navigation and panels
+        if (tabNavigation) tabNavigation.classList.add('hidden');
+        if (seriesTabPanel) seriesTabPanel.classList.add('hidden');
+        if (scheduleTabPanel) scheduleTabPanel.classList.add('hidden');
+        
+        // Reset forms
+        const scheduleForm = document.getElementById('scheduleForm');
+        const seriesForm = document.getElementById('seriesForm');
+        if (scheduleForm) scheduleForm.reset();
+        if (seriesForm) seriesForm.reset();
+    }
+
     showBulkUpdateProgress(recordCount) {
         // Show progress indicator in status bar
         this.setStatus(`Bulk update in progress: updating ${recordCount} series records...`, 'info');
@@ -2696,7 +2632,7 @@ class ILETSBApp {
             form.classList.remove('loading');
         }
     }
-    
+
     async refreshCountsUI() {
         try {
             const totalSeries = await this.getSeriesItemsCount();
@@ -2740,13 +2676,22 @@ class ILETSBApp {
         if (!searchPane || !mainContent || !toggleBtn) return;
         
         if (isCollapsed) {
+            // Collapse the search pane
             searchPane.classList.add('collapsed');
             mainContent.classList.add('search-collapsed');
             toggleBtn.setAttribute('aria-expanded', 'false');
         } else {
+            // Expand the search pane
             searchPane.classList.remove('collapsed');
             mainContent.classList.remove('search-collapsed');
             toggleBtn.setAttribute('aria-expanded', 'true');
+        }
+        
+        // Save state to localStorage
+        try {
+            localStorage.setItem('iletsb_search_pane_collapsed', (!isCollapsed).toString());
+        } catch (e) {
+            // If storage is unavailable, continue without saving state
         }
     }
 }
