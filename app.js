@@ -195,6 +195,13 @@ class ILETSBApp {
                             }
                         });
                         
+                        // Ensure ui_extras exists
+                        item.ui_extras = item.ui_extras || {};
+                        
+                        // Remove old fields that are no longer needed
+                        delete item.retention_is_permanent;
+                        delete item.schedule_id;
+                        
                         // Save to database
                         await this.saveSeries(item, false);
                     }
@@ -377,10 +384,6 @@ class ILETSBApp {
         return Array.from(scheduleMap.values());
     }
 
-    async getAllSeriesItems() {
-        // Legacy method - now returns all series
-        return this.getAllSeries();
-    }
 
     async getAllSeries() {
         return new Promise((resolve, reject) => {
@@ -501,15 +504,12 @@ class ILETSBApp {
         });
     }
 
-    async saveSeriesItem(item, isUpdate = false) {
-        // Legacy method - now calls saveSeries
-        return this.saveSeries(item, isUpdate);
-    }
 
     async saveSeries(item, isUpdate = false) {
         return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['series'], 'readwrite');
-            const store = transaction.objectStore('series');
+            // Create a transaction that includes BOTH stores
+            const transaction = this.db.transaction(['series', 'audit_events'], 'readwrite');
+            const seriesStore = transaction.objectStore('series');
             
             const now = new Date().toISOString();
             if (!isUpdate) {
@@ -517,26 +517,27 @@ class ILETSBApp {
             }
             item.updated_at = now;
             
-            const request = isUpdate ? store.put(item) : store.add(item);
+            const request = isUpdate ? seriesStore.put(item) : seriesStore.add(item);
             
             request.onsuccess = () => {
                 const id = request.result;
                 item._id = id;
                 
-                // Log audit event separately to avoid blocking the main operation
-                setTimeout(() => {
-                    this.logAuditEvent('series', id, isUpdate ? 'update' : 'create', { 
-                        schedule_number: item.schedule_number,
-                        item_number: item.item_number,
-                        record_series_title: item.record_series_title
-                    }).catch(err => {
-                        ErrorHandler.log(err, 'Audit event logging');
-                    });
-                }, 0);
-                
-                resolve(item);
+                // Log the audit event USING THE SAME TRANSACTION
+                this.logAuditEvent('series', id, isUpdate ? 'update' : 'create', {
+                    schedule_number: item.schedule_number,
+                    item_number: item.item_number,
+                    record_series_title: item.record_series_title
+                }, transaction).catch(err => {
+                    ErrorHandler.log(err, 'Audit event logging');
+                    transaction.abort(); // IMPORTANT: Abort if logging fails
+                });
             };
+            
             request.onerror = () => reject(request.error);
+            
+            transaction.oncomplete = () => resolve(item);
+            transaction.onerror = () => reject(transaction.error);
         });
     }
 
@@ -559,10 +560,6 @@ class ILETSBApp {
         this.logAuditEvent('series', id, 'schedule_unassigned', { schedule_number: scheduleNumber });
     }
 
-    async deleteSeriesItem(id) {
-        // Legacy method - now calls deleteSeries
-        return this.deleteSeries(id);
-    }
 
     async deleteSeries(id) {
         return new Promise((resolve, reject) => {
@@ -602,10 +599,11 @@ class ILETSBApp {
         });
     }
 
-    async logAuditEvent(entity, entityId, action, payload) {
+    async logAuditEvent(entity, entityId, action, payload, transaction = null) {
         return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['audit_events'], 'readwrite');
-            const store = transaction.objectStore('audit_events');
+            // If no transaction is passed, create a new one
+            const trans = transaction || this.db.transaction(['audit_events'], 'readwrite');
+            const store = trans.objectStore('audit_events');
             
             const event = {
                 entity,
@@ -619,6 +617,9 @@ class ILETSBApp {
             const request = store.add(event);
             request.onsuccess = () => resolve();
             request.onerror = () => reject(request.error);
+            
+            // Don't commit if the transaction was passed in from outside
+            // The calling function will handle committing
         });
     }
 
@@ -788,33 +789,6 @@ class ILETSBApp {
 
 
     // Bulk Update UI Feedback Methods
-    showBulkUpdateProgress(recordCount) {
-        // Disable form submission during bulk update
-        const submitBtn = document.querySelector('#scheduleForm button[type="submit"]');
-        const cancelBtn = document.getElementById('cancelScheduleBtn');
-        
-        if (submitBtn) {
-            submitBtn.disabled = true;
-            submitBtn.innerHTML = `
-                <span class="loading-spinner"></span>
-                Updating ${recordCount} records...
-            `;
-        }
-        
-        if (cancelBtn) {
-            cancelBtn.disabled = true;
-        }
-        
-        // Show progress indicator in status bar
-        this.setStatus(`Bulk update in progress: updating ${recordCount} series records...`, 'info');
-        
-        // Add loading class to form for visual feedback
-        const form = document.getElementById('scheduleForm');
-        if (form) {
-            form.classList.add('bulk-updating');
-        }
-    }
-    
     hideBulkUpdateProgress() {
         // Re-enable form controls
         const submitBtn = document.querySelector('#scheduleForm button[type="submit"]');
@@ -1157,6 +1131,11 @@ class ILETSBApp {
         }
     }
 
+    // Alias method to match event listener expectation
+    handleSeriesSubmit(e) {
+        return this.handleSeriesFormSubmit(e);
+    }
+
     updateChipSelection(chipContainer, selectedValue) {
         if (!chipContainer) return;
         
@@ -1460,34 +1439,10 @@ class ILETSBApp {
         const confirmed = confirm(`Are you sure you want to delete the series item "${this.currentSeriesItem.record_series_title}"? This action cannot be undone.`);
         
         if (confirmed) {
-            this.deleteSeriesItem(this.currentSeriesItem._id);
+            this.deleteSeries(this.currentSeriesItem._id);
         }
     }
 
-    async deleteSeriesItem(id) {
-        try {
-            // Delete from database
-            const transaction = this.db.transaction(['series'], 'readwrite');
-            const store = transaction.objectStore('series');
-            await store.delete(id);
-            
-            // Log audit event
-            await this.logAuditEvent('series', id, 'delete', this.currentSeriesItem);
-            
-            // Clear current selection
-            this.currentSeriesItem = null;
-            this.selectedItemId = null;
-            
-            // Update UI
-            this.updateUI();
-            this.hideDetails();
-            this.setStatus('Series item deleted successfully', 'success');
-            
-        } catch (error) {
-            ErrorHandler.log(error, 'Delete series item');
-            this.setStatus(`Error deleting series item: ${error.message}`, 'error');
-        }
-    }
 
     confirmDeleteSchedule() {
         // This would delete schedule assignment from all matching series
@@ -1622,42 +1577,6 @@ class ILETSBApp {
         } catch (error) {
             return Promise.reject(error);
         }
-    }
-
-    async loadSchedulesWithCursorOld(limit = null, offset = 0) {
-        return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction(['schedules'], 'readonly');
-            const store = transaction.objectStore('schedules');
-            const request = store.openCursor();
-            
-            let count = 0;
-            let skipped = 0;
-            const results = [];
-            
-            request.onsuccess = (event) => {
-                const cursor = event.target.result;
-                if (cursor) {
-                    if (skipped < offset) {
-                        skipped++;
-                        cursor.continue();
-                        return;
-                    }
-                    
-                    if (limit && count >= limit) {
-                        resolve(results);
-                        return;
-                    }
-                    
-                    results.push({ ...cursor.value, _id: cursor.key });
-                    count++;
-                    cursor.continue();
-                } else {
-                    resolve(results);
-                }
-            };
-            
-            request.onerror = () => reject(request.error);
-        });
     }
 
     async getSeriesItemsCount() {
@@ -1893,7 +1812,7 @@ class ILETSBApp {
                 if ('application_number' in si) delete si.application_number;
                 if ('schedule_number' in si) delete si.schedule_number;
                 if ('series_number' in si) delete si.series_number;
-                try { await this.saveSeriesItem(si, true); } catch (e) { ErrorHandler.log(e, 'Normalize series'); }
+                try { await this.saveSeries(si, true); } catch (e) { ErrorHandler.log(e, 'Normalize series'); }
             }
         }
     }
@@ -1946,35 +1865,6 @@ class ILETSBApp {
                 selectedRow.classList.add('selected');
             }
         }
-    }
-
-    // Removed virtual scrolling - using simpler direct rendering
-
-    // Removed virtual scroll handler
-
-    // Removed virtual viewport rendering
-
-    // Removed old filtered items count method
-
-    // Removed old filtered items range method
-
-    // Removed old filter matching method - replaced with new system
-
-    getRetentionCategory(item) {
-        if (item.retention_term && item.retention_term > 0) {
-            return 'time-limited';
-        } else {
-            return 'unknown';
-        }
-    }
-
-    extractYear(dateString) {
-        if (!dateString) return null;
-        if (dateString.toLowerCase() === 'present') return new Date().getFullYear();
-        
-        // Try to extract year from various formats
-        const yearMatch = dateString.match(/(\d{4})/);
-        return yearMatch ? parseInt(yearMatch[1]) : null;
     }
 
     createResultRow(item, index) {
@@ -2318,22 +2208,16 @@ class ILETSBApp {
             const allSeries = await this.getAllSeries();
             const affectedCount = allSeries.filter(s => s.schedule_number === scheduleNumber).length;
             
-            if (affectedCount > 1) {
-                this.showBulkUpdateProgress(affectedCount);
-            }
-            
             await this.saveSchedule(schedule, true);
             
             const message = affectedCount > 1 
                 ? `Schedule saved successfully. Updated ${affectedCount} series records.`
                 : 'Schedule saved successfully';
             
-            this.hideBulkUpdateProgress();
             this.updateUI();
             this.setStatus(message, 'success');
         } catch (error) {
             ErrorHandler.log(error, 'Schedule form submission');
-            this.hideBulkUpdateProgress();
             this.setStatus(`Error saving schedule: ${error.message}`, 'error');
         }
     }
@@ -2614,29 +2498,10 @@ class ILETSBApp {
         if (seriesForm) seriesForm.reset();
     }
 
-    showBulkUpdateProgress(recordCount) {
-        // Show progress indicator in status bar
-        this.setStatus(`Bulk update in progress: updating ${recordCount} series records...`, 'info');
-        
-        // Add loading class to form for visual feedback
-        const form = document.getElementById('scheduleForm');
-        if (form) {
-            form.classList.add('loading');
-        }
-    }
-    
-    hideBulkUpdateProgress() {
-        // Remove loading class from form
-        const form = document.getElementById('scheduleForm');
-        if (form) {
-            form.classList.remove('loading');
-        }
-    }
-
-    async refreshCountsUI() {
+    refreshCountsUI() {
         try {
-            const totalSeries = await this.getSeriesItemsCount();
-            const nonBlank = await this.getAllSeries();
+            const totalSeries = this.seriesItems.length;
+            const nonBlank = this.seriesItems.filter(s => s.schedule_number && s.schedule_number.trim() !== '');
             const scheduleNumbers = nonBlank
                 .map(s => s.schedule_number)
                 .filter(n => n && n.trim() !== '')
