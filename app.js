@@ -817,7 +817,7 @@ class ILETSBApp {
         if (newScheduleBtn) {
             newScheduleBtn.addEventListener('click', () => this.createNewSchedule());
         }
-        document.getElementById('newSeriesBtn').addEventListener('click', () => this.createNewSeriesItem());
+        document.getElementById('newSeriesBtn').addEventListener('click', () => this.selectSeriesItem(null));
         // Export and import buttons are handled in setupAdminMenu() to avoid duplicate listeners
         document.getElementById('importFile').addEventListener('change', (e) => this.importData(e));
         // Export filtered button is handled in setupAdminMenu() to avoid duplicate listeners
@@ -944,7 +944,7 @@ class ILETSBApp {
         // Admin menu item handlers
         if (newSeriesBtn) {
             newSeriesBtn.addEventListener('click', () => {
-                this.createNewSeriesItem();
+                this.selectSeriesItem(null);
                 adminDropdown.classList.add('hidden');
                 adminMenuBtn.setAttribute('aria-expanded', 'false');
             });
@@ -1961,15 +1961,15 @@ class ILETSBApp {
         let showSeriesTab = false;
         let showScheduleTab = false;
         
-        if (seriesItem !== null) {
-            showSeriesTab = true;
-            if (seriesItem && Object.keys(seriesItem).length > 0) {
-                // Forms will be populated after tab is made visible
-                this.populateSeriesForm(seriesItem);
-            } else {
-                const seriesForm = document.getElementById('seriesForm');
-                if (seriesForm) seriesForm.reset();
-            }
+        // Always show series tab (for both existing records and new records)
+        showSeriesTab = true;
+        if (seriesItem && Object.keys(seriesItem).length > 0) {
+            // Populate form with existing data
+            this.populateSeriesForm(seriesItem);
+        } else {
+            // Clear form for new record
+            const seriesForm = document.getElementById('seriesForm');
+            if (seriesForm) seriesForm.reset();
         }
         
         if (schedule !== null) {
@@ -2072,33 +2072,45 @@ class ILETSBApp {
         // Clear previous selection
         document.querySelectorAll('.result-item').forEach(row => row.classList.remove('selected'));
         
-        // Select new item
-        const row = document.querySelector(`[data-item-id="${item._id}"]`);
-        if (row) row.classList.add('selected');
-        
-        this.selectedItemId = item._id;
-        this.currentSeriesItem = item;
-        
-        // In merged schema, schedule info is stored directly on series record
-        let scheduleInfo = null;
-        if (item.schedule_number) {
-            // Create schedule object from series data for display
-            scheduleInfo = {
-                _id: `sched_${item.schedule_number}`,
-                schedule_number: item.schedule_number,
-                approval_status: item.approval_status,
-                approval_date: item.approval_date,
-                division: item.division,
-                notes: item.notes,
-                tags: item.tags || []
-            };
+        if (item) {
+            // Select existing item
+            const row = document.querySelector(`[data-item-id="${item._id}"]`);
+            if (row) row.classList.add('selected');
+            
+            this.selectedItemId = item._id;
+            this.currentSeriesItem = item;
+            
+            // In merged schema, schedule info is stored directly on series record
+            let scheduleInfo = null;
+            if (item.schedule_number) {
+                // Create schedule object from series data for display
+                scheduleInfo = {
+                    _id: `sched_${item.schedule_number}`,
+                    schedule_number: item.schedule_number,
+                    approval_status: item.approval_status,
+                    approval_date: item.approval_date,
+                    division: item.division,
+                    notes: item.notes,
+                    tags: item.tags || []
+                };
+            }
+            
+            // Display both schedule and series details
+            this.displayDetails(scheduleInfo, item);
+            
+            const deleteSeriesBtn = document.getElementById('deleteSeriesBtn');
+            if (deleteSeriesBtn) deleteSeriesBtn.classList.remove('hidden');
+        } else {
+            // Create new item - clear form
+            this.selectedItemId = null;
+            this.currentSeriesItem = null;
+            
+            // Clear the form for new entry
+            this.displayDetails(null, null);
+            
+            const deleteSeriesBtn = document.getElementById('deleteSeriesBtn');
+            if (deleteSeriesBtn) deleteSeriesBtn.classList.add('hidden');
         }
-        
-        // Display both schedule and series details
-        this.displayDetails(scheduleInfo, item);
-        
-        const deleteSeriesBtn = document.getElementById('deleteSeriesBtn');
-        if (deleteSeriesBtn) deleteSeriesBtn.classList.remove('hidden');
     }
 
     populateSeriesForm(item) {
