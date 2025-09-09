@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ILETSB Records Retention Inventory</title>
+    <title>Records Retention Inventory Dashboard</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -11,10 +11,26 @@
         <!-- Top Navigation -->
         <header class="top-nav">
             <div class="nav-left">
-                <h1>ILETSB Records Retention Inventory</h1>
-                <span class="version">v3.7</span>
+                <h1>Records Retention Inventory Dashboard</h1>
+                <span class="version">v4 - Draft (5 ILCS 140/7(1)(f))</span>
             </div>
             <div class="nav-right">
+                <button class="theme-toggle" id="themeToggle" aria-label="Toggle dark mode" title="Toggle dark mode">
+                    <svg class="theme-icon theme-icon--light" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="5"></circle>
+                        <line x1="12" y1="1" x2="12" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="23"></line>
+                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                        <line x1="1" y1="12" x2="3" y2="12"></line>
+                        <line x1="21" y1="12" x2="23" y2="12"></line>
+                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                    </svg>
+                    <svg class="theme-icon theme-icon--dark hidden" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                    </svg>
+                </button>
                 <div class="admin-menu" id="adminMenu">
                     <button class="btn btn--secondary btn--sm" id="adminMenuBtn" aria-haspopup="true" aria-expanded="false" aria-controls="adminDropdown">
                         <span>Admin</span>
@@ -24,13 +40,16 @@
                         <button class="dropdown-item" id="newSeriesBtn" role="menuitem">New Series Item</button>
                         <hr class="dropdown-sep" aria-hidden="true">
                         <button class="dropdown-item" id="exportBtn" role="menuitem">Export JSON</button>
+                        <button class="dropdown-item" id="exportExcelBtn" role="menuitem">Export Excel</button>
                         <button class="dropdown-item" id="importBtn" role="menuitem">Import JSON</button>
+                        <button class="dropdown-item" id="importExcelBtn" role="menuitem">Import Excel</button>
                         <hr class="dropdown-sep" aria-hidden="true">
                         <button class="dropdown-item danger" id="clearDbBtn" role="menuitem" aria-describedby="clearDbDesc">Clear DB</button>
                         <span id="clearDbDesc" class="sr-only">Removes all schedules, series items, and audit logs from this browser.</span>
                     </div>
                 </div>
                 <input type="file" id="importFile" accept=".json" style="display: none;">
+                <input type="file" id="importExcelFile" accept=".xlsx,.xls" style="display: none;">
             </div>
         </header>
 
@@ -453,6 +472,8 @@
     </div>
 
 
+    <!-- SheetJS library for Excel import/export -->
+    <script src="https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

@@ -2,7 +2,7 @@
 trigger: always_on
 ---
 
-# RULES.md — ILETSB Records Inventory (Essential Rules)
+# RULES.md — Records Records Inventory Dashboard (Essential Rules)
 
 ## 1) App & Storage
 - Offline static app (HTML/JS/CSS). **No network calls.**

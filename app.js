@@ -1,11 +1,11 @@
-// ILETSB Records Retention Inventory Application
+// Records Retention Inventory Dashboard Application
 // IndexedDB-based offline records management system
 
 /**
  * Application constants
  */
 const APP_CONSTANTS = {
-    DB_NAME: 'ILETSBRecords',
+    DB_NAME: 'RecordsRetentionRecords',
     DB_VERSION: 2,
     VIRTUAL_SCROLL_ITEM_HEIGHT: 80,
     VIRTUAL_SCROLL_BUFFER: 5,
@@ -131,7 +131,7 @@ class DOMHelper {
     }
 }
 
-class ILETSBApp {
+class RecordsRetentionApp {
     constructor() {
         this.db = null;
         this.dbName = APP_CONSTANTS.DB_NAME;
@@ -150,6 +150,9 @@ class ILETSBApp {
     async init() {
         try {
             await this.initDatabase();
+            
+            // Initialize theme system
+            this.initTheme();
             
             // Check if database is empty and load test data if needed
             const existingData = await this.getAllSeries();
@@ -818,8 +821,12 @@ class ILETSBApp {
             newScheduleBtn.addEventListener('click', () => this.createNewSchedule());
         }
         document.getElementById('newSeriesBtn').addEventListener('click', () => this.selectSeriesItem(null));
+        
+        // Theme toggle
+        document.getElementById('themeToggle').addEventListener('click', () => this.toggleTheme());
         // Export and import buttons are handled in setupAdminMenu() to avoid duplicate listeners
         document.getElementById('importFile').addEventListener('change', (e) => this.importData(e));
+        document.getElementById('importExcelFile').addEventListener('change', (e) => this.importFromExcel(e));
         // Export filtered button is handled in setupAdminMenu() to avoid duplicate listeners
 
         // Search and filters
@@ -913,7 +920,9 @@ class ILETSBApp {
         const adminDropdown = document.getElementById('adminDropdown');
         const newSeriesBtn = document.getElementById('newSeriesBtn');
         const exportBtn = document.getElementById('exportBtn');
+        const exportExcelBtn = document.getElementById('exportExcelBtn');
         const importBtn = document.getElementById('importBtn');
+        const importExcelBtn = document.getElementById('importExcelBtn');
         const exportFilteredBtn = document.getElementById('exportFilteredBtn');
         const clearDbBtn = document.getElementById('clearDbBtn');
 
@@ -958,9 +967,25 @@ class ILETSBApp {
             });
         }
 
+        if (exportExcelBtn) {
+            exportExcelBtn.addEventListener('click', () => {
+                this.exportToExcel();
+                adminDropdown.classList.add('hidden');
+                adminMenuBtn.setAttribute('aria-expanded', 'false');
+            });
+        }
+
         if (importBtn) {
             importBtn.addEventListener('click', () => {
                 this.showImportModal();
+                adminDropdown.classList.add('hidden');
+                adminMenuBtn.setAttribute('aria-expanded', 'false');
+            });
+        }
+
+        if (importExcelBtn) {
+            importExcelBtn.addEventListener('click', () => {
+                document.getElementById('importExcelFile').click();
                 adminDropdown.classList.add('hidden');
                 adminMenuBtn.setAttribute('aria-expanded', 'false');
             });
@@ -1537,6 +1562,199 @@ class ILETSBApp {
         } catch (error) {
             ErrorHandler.log(error, 'Import data');
             this.setStatus(`Error importing data: ${error.message}`, 'error');
+        } finally {
+            // Clear the file input
+            event.target.value = '';
+        }
+    }
+
+    async exportToExcel() {
+        try {
+            // Get all data from database
+            const series = await this.getAllSeries();
+            const auditEvents = await this.getAllAuditEvents();
+            
+            // Prepare series data for Excel with placeholders for blank required fields
+            const seriesForExcel = series.map(item => {
+                const excelItem = { ...item };
+                
+                // Add placeholders for blank required fields to ensure round-trip compatibility
+                if (!excelItem.record_series_title || excelItem.record_series_title.trim() === '') {
+                    excelItem.record_series_title = 'PLACEHOLDER_TITLE';
+                }
+                
+                // Convert arrays to semicolon-separated strings for Excel compatibility
+                ['tags', 'media_types', 'omb_or_statute_refs', 'related_series'].forEach(field => {
+                    if (Array.isArray(excelItem[field])) {
+                        excelItem[field] = excelItem[field].join('; ');
+                    }
+                });
+                
+                // Flatten ui_extras object for Excel columns
+                if (excelItem.ui_extras && typeof excelItem.ui_extras === 'object') {
+                    Object.keys(excelItem.ui_extras).forEach(key => {
+                        excelItem[`ui_extras_${key}`] = excelItem.ui_extras[key];
+                    });
+                    delete excelItem.ui_extras;
+                }
+                
+                return excelItem;
+            });
+            
+            // Create workbook
+            const wb = XLSX.utils.book_new();
+            
+            // Sheet 1: Series Data
+            const seriesWs = XLSX.utils.json_to_sheet(seriesForExcel);
+            XLSX.utils.book_append_sheet(wb, seriesWs, 'Series Data');
+            
+            // Sheet 2: Audit Events
+            const auditWs = XLSX.utils.json_to_sheet(auditEvents);
+            XLSX.utils.book_append_sheet(wb, auditWs, 'Audit Events');
+            
+            // Sheet 3: Metadata
+            const metadata = {
+                exported_at: new Date().toISOString(),
+                version: '3.7',
+                total_series: series.length,
+                total_schedules: new Set(series.map(s => s.schedule_number).filter(Boolean)).size,
+                export_type: 'excel_full_database'
+            };
+            const metadataWs = XLSX.utils.json_to_sheet([metadata]);
+            XLSX.utils.book_append_sheet(wb, metadataWs, 'Metadata');
+            
+            // Generate filename
+            const filename = `iletsb-records-export-${new Date().toISOString().split('T')[0]}.xlsx`;
+            
+            // Write and download file
+            XLSX.writeFile(wb, filename);
+            
+            this.setStatus(`Exported ${series.length} series records to Excel successfully`, 'success');
+            
+        } catch (error) {
+            ErrorHandler.log(error, 'Export to Excel');
+            this.setStatus(`Error exporting to Excel: ${error.message}`, 'error');
+        }
+    }
+
+    async importFromExcel(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        try {
+            // Read the Excel file
+            const arrayBuffer = await file.arrayBuffer();
+            const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+            
+            // Check if this is a valid export file
+            if (!workbook.SheetNames.includes('Series Data')) {
+                this.setStatus('Invalid Excel file: missing "Series Data" sheet', 'error');
+                return;
+            }
+            
+            // Read series data from Sheet 1
+            const seriesSheet = workbook.Sheets['Series Data'];
+            const seriesData = XLSX.utils.sheet_to_json(seriesSheet);
+            
+            if (!seriesData || seriesData.length === 0) {
+                this.setStatus('No series data found in Excel file', 'error');
+                return;
+            }
+            
+            let importedCount = 0;
+            const errors = [];
+            
+            // Process each series item
+            for (const item of seriesData) {
+                try {
+                    // Remove placeholder values
+                    if (item.record_series_title === 'PLACEHOLDER_TITLE') {
+                        item.record_series_title = '';
+                    }
+                    
+                    // Handle legacy application_number field
+                    if (item.application_number && !item.schedule_number) {
+                        item.schedule_number = item.application_number;
+                        delete item.application_number;
+                    }
+                    
+                    // Convert semicolon-separated strings back to arrays
+                    ['tags', 'media_types', 'omb_or_statute_refs', 'related_series'].forEach(field => {
+                        if (item[field] && typeof item[field] === 'string') {
+                            item[field] = item[field].split(/[;,\n]/).map(s => s.trim()).filter(Boolean);
+                        }
+                    });
+                    
+                    // Reconstruct ui_extras object from flattened columns
+                    item.ui_extras = {};
+                    Object.keys(item).forEach(key => {
+                        if (key.startsWith('ui_extras_')) {
+                            const extraKey = key.replace('ui_extras_', '');
+                            item.ui_extras[extraKey] = item[key];
+                            delete item[key];
+                        }
+                    });
+                    
+                    // Remove _id to prevent conflicts - let database assign new IDs
+                    delete item._id;
+                    
+                    // Set timestamps
+                    const now = new Date().toISOString();
+                    item.created_at = item.created_at || now;
+                    item.updated_at = now;
+                    item.version = (item.version || 0) + 1;
+                    
+                    // Validate required fields
+                    if (!item.record_series_title || item.record_series_title.trim() === '') {
+                        errors.push(`Skipping item with missing title`);
+                        continue;
+                    }
+                    
+                    // Save to database
+                    await this.saveSeries(item, false);
+                    importedCount++;
+                    
+                } catch (error) {
+                    errors.push(`Error importing item "${item.record_series_title || 'Unknown'}": ${error.message}`);
+                }
+            }
+            
+            // Import audit events if present
+            if (workbook.SheetNames.includes('Audit Events')) {
+                const auditSheet = workbook.Sheets['Audit Events'];
+                const auditData = XLSX.utils.sheet_to_json(auditSheet);
+                
+                for (const auditEvent of auditData) {
+                    try {
+                        // Remove _id to prevent conflicts
+                        delete auditEvent._id;
+                        await this.logAuditEvent(
+                            auditEvent.entity,
+                            auditEvent.entity_id,
+                            auditEvent.action,
+                            auditEvent.payload,
+                            auditEvent.actor,
+                            auditEvent.at
+                        );
+                    } catch (error) {
+                        // Silently handle audit event import errors
+                    }
+                }
+            }
+            
+            // Update UI and show results
+            this.updateUI();
+            
+            if (errors.length > 0) {
+                console.warn('Import errors:', errors);
+                this.setStatus(`Imported ${importedCount} records with ${errors.length} errors`, 'success');
+            } else {
+                this.setStatus(`Successfully imported ${importedCount} series records from Excel`, 'success');
+            }
+            
+        } catch (error) {
+            ErrorHandler.log(error, 'Import from Excel');
+            this.setStatus(`Error importing from Excel: ${error.message}`, 'error');
         } finally {
             // Clear the file input
             event.target.value = '';
@@ -2571,11 +2789,75 @@ class ILETSBApp {
             // If storage is unavailable, continue without saving state
         }
     }
+
+    // Theme Management
+    initTheme() {
+        // Get saved theme preference or default to system preference
+        let savedTheme;
+        try {
+            savedTheme = localStorage.getItem('iletsb_theme');
+        } catch (e) {
+            // If storage is unavailable, use system preference
+            savedTheme = null;
+        }
+
+        if (savedTheme) {
+            this.setTheme(savedTheme);
+        } else {
+            // Use system preference
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            this.setTheme(prefersDark ? 'dark' : 'light');
+        }
+
+        // Listen for system theme changes
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+            // Only auto-switch if user hasn't manually set a preference
+            try {
+                const savedTheme = localStorage.getItem('iletsb_theme');
+                if (!savedTheme) {
+                    this.setTheme(e.matches ? 'dark' : 'light');
+                }
+            } catch (err) {
+                // If storage is unavailable, follow system preference
+                this.setTheme(e.matches ? 'dark' : 'light');
+            }
+        });
+    }
+
+    setTheme(theme) {
+        const html = document.documentElement;
+        const lightIcon = document.querySelector('.theme-icon--light');
+        const darkIcon = document.querySelector('.theme-icon--dark');
+
+        if (theme === 'dark') {
+            html.setAttribute('data-color-scheme', 'dark');
+            if (lightIcon) lightIcon.classList.add('hidden');
+            if (darkIcon) darkIcon.classList.remove('hidden');
+        } else {
+            html.setAttribute('data-color-scheme', 'light');
+            if (lightIcon) lightIcon.classList.remove('hidden');
+            if (darkIcon) darkIcon.classList.add('hidden');
+        }
+
+        // Save preference
+        try {
+            localStorage.setItem('iletsb_theme', theme);
+        } catch (e) {
+            // If storage is unavailable, continue without saving
+        }
+    }
+
+    toggleTheme() {
+        const html = document.documentElement;
+        const currentTheme = html.getAttribute('data-color-scheme');
+        const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        this.setTheme(newTheme);
+    }
 }
 
 // Initialize the application when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
-    const app = new ILETSBApp();
+    const app = new RecordsRetentionApp();
     
     // Setup form event handlers after app initialization
     app.setupFormEventHandlers();

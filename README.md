@@ -1,6 +1,6 @@
-# ILETSB Records Retention System
+# Records Retention Inventory Dashboard
 
-A modern, offline-first web application for managing records retention schedules and series for the Illinois Law Enforcement Training and Standards Board (ILETSB). This system is designed for high performance, ease of use, and complete functionality without requiring a network connection.
+A modern, offline-first web application for managing records retention schedules and series. This system is designed for high performance, ease of use, and complete functionality without requiring a network connection.
 
 ## Key Features
 
@@ -88,7 +88,7 @@ This project began as a proof-of-concept in Perplexity Labs, where an initial ve
 
 Following the successful proof-of-concept, the project was migrated to the Windsurf development environment for more advanced coding and refinement. The application has since been co-developed using a combination of AI coding assistants, including models from OpenAI (GPT series), Google (Gemini series), and Anthropic (Claude series), as well as specialized software engineering models.
 
-The project is under active development, with the data schema and application features continuously evolving to meet the specific needs of ILETSB.
+The project is under active development, with the data schema and application features continuously evolving to meet organizational needs.
 
 ## Browser Support
 
