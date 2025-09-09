@@ -2263,6 +2263,336 @@ select.form-control {
     100% { transform: translateX(100%); }
 }
 
+/* ===== DISCO MODE STYLES ===== */
+
+/* Disco mode root variables - vibrant rainbow colors */
+[data-disco-mode="true"] {
+  --disco-primary: #ff0080;
+  --disco-secondary: #00ff80;
+  --disco-accent: #8000ff;
+  --disco-warning: #ffff00;
+  --disco-error: #ff0040;
+  --disco-success: #00ffff;
+  --disco-purple: #ff00ff;
+  --disco-orange: #ff8000;
+  --disco-blue: #0080ff;
+  --disco-green: #80ff00;
+  --disco-red: #ff4040;
+  
+  /* Animated background gradients */
+  --disco-gradient-1: linear-gradient(45deg, #ff0080, #ff8000, #ffff00, #80ff00, #00ff80, #0080ff, #8000ff, #ff00ff);
+  --disco-gradient-2: linear-gradient(135deg, #ff0040, #ff4000, #ff8000, #ffbf00, #80ff00, #00ff40, #00ff80, #00ffbf, #0080ff, #0040ff, #4000ff, #8000ff, #bf00ff, #ff00ff, #ff00bf);
+  --disco-gradient-3: radial-gradient(circle, #ff0080, #ff8000, #ffff00, #80ff00, #00ff80, #0080ff, #8000ff);
+}
+
+/* Disco mode toggle button special styling */
+.disco-toggle {
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.disco-toggle:hover {
+  transform: scale(1.1) rotate(5deg);
+}
+
+.disco-toggle.active {
+  background: linear-gradient(45deg, #ff0080, #ff8000, #ffff00, #80ff00, #00ff80, #0080ff, #8000ff);
+  background-size: 400% 400%;
+  animation: discoGradient 3s ease infinite;
+  color: white;
+  box-shadow: 0 0 20px rgba(255, 0, 128, 0.5);
+}
+
+.disco-toggle .disco-icon {
+  transition: all 0.3s ease;
+}
+
+.disco-toggle:hover .disco-icon {
+  transform: rotate(180deg) scale(1.2);
+  animation: discoSpin 2s linear infinite;
+}
+
+/* Main disco mode body styling */
+[data-disco-mode="true"] body {
+  background: var(--disco-gradient-1);
+  background-size: 400% 400%;
+  animation: discoGradient 8s ease infinite;
+  color: white;
+}
+
+[data-disco-mode="true"] .top-nav {
+  background: rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(10px);
+  border-bottom: 2px solid var(--disco-primary);
+  box-shadow: 0 4px 20px rgba(255, 0, 128, 0.3);
+}
+
+[data-disco-mode="true"] .main-content {
+  background: rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(5px);
+}
+
+/* Search pane disco styling */
+[data-disco-mode="true"] .search-pane {
+  background: linear-gradient(135deg, rgba(255, 0, 128, 0.2), rgba(0, 255, 128, 0.2));
+  border-right: 3px solid var(--disco-secondary);
+  box-shadow: inset 0 0 20px rgba(255, 0, 128, 0.1);
+}
+
+[data-disco-mode="true"] .search-section h3 {
+  color: var(--disco-warning);
+  text-shadow: 0 0 10px var(--disco-warning);
+  border-bottom: 2px solid var(--disco-warning);
+}
+
+/* Results pane disco styling */
+[data-disco-mode="true"] .results-pane {
+  background: linear-gradient(45deg, rgba(128, 0, 255, 0.2), rgba(0, 128, 255, 0.2));
+  border-right: 3px solid var(--disco-accent);
+}
+
+[data-disco-mode="true"] .results-header {
+  background: rgba(0, 0, 0, 0.4);
+  border-bottom: 2px solid var(--disco-blue);
+  box-shadow: 0 2px 10px rgba(0, 128, 255, 0.3);
+}
+
+[data-disco-mode="true"] .results-table-header {
+  background: linear-gradient(90deg, var(--disco-purple), var(--disco-orange));
+  color: white;
+  text-shadow: 0 0 5px rgba(255, 255, 255, 0.5);
+}
+
+/* Result items disco styling */
+[data-disco-mode="true"] .result-item {
+  background: rgba(0, 0, 0, 0.4);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  position: relative;
+  overflow: hidden;
+}
+
+[data-disco-mode="true"] .result-item::before {
+  content: '';
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  right: -2px;
+  bottom: -2px;
+  background: var(--disco-gradient-2);
+  background-size: 400% 400%;
+  animation: discoGradient 3s ease infinite;
+  z-index: -1;
+  border-radius: var(--radius-base);
+}
+
+[data-disco-mode="true"] .result-item:hover {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 8px 25px rgba(255, 0, 128, 0.4);
+}
+
+[data-disco-mode="true"] .result-item.selected {
+  background: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 0 30px var(--disco-primary);
+}
+
+/* Detail pane disco styling */
+[data-disco-mode="true"] .detail-pane {
+  background: linear-gradient(225deg, rgba(255, 255, 0, 0.2), rgba(255, 0, 255, 0.2));
+  border-left: 3px solid var(--disco-purple);
+}
+
+[data-disco-mode="true"] .detail-header {
+  background: rgba(0, 0, 0, 0.4);
+  border-bottom: 2px solid var(--disco-green);
+  box-shadow: 0 2px 10px rgba(128, 255, 0, 0.3);
+}
+
+/* Form elements disco styling */
+[data-disco-mode="true"] .form-control {
+  background: rgba(0, 0, 0, 0.5);
+  border: 2px solid var(--disco-blue);
+  color: white;
+  box-shadow: inset 0 0 10px rgba(0, 128, 255, 0.2);
+}
+
+[data-disco-mode="true"] .form-control:focus {
+  border-color: var(--disco-warning);
+  box-shadow: 0 0 15px var(--disco-warning), inset 0 0 10px rgba(255, 255, 0, 0.2);
+}
+
+[data-disco-mode="true"] .form-label {
+  color: var(--disco-warning);
+  text-shadow: 0 0 5px var(--disco-warning);
+}
+
+/* Buttons disco styling */
+[data-disco-mode="true"] .btn {
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+[data-disco-mode="true"] .btn--primary {
+  background: var(--disco-gradient-1);
+  background-size: 400% 400%;
+  animation: discoGradient 2s ease infinite;
+  color: white;
+  border: none;
+  box-shadow: 0 4px 15px rgba(255, 0, 128, 0.4);
+}
+
+[data-disco-mode="true"] .btn--secondary {
+  background: rgba(255, 255, 255, 0.2);
+  border: 2px solid var(--disco-secondary);
+  color: var(--disco-secondary);
+  text-shadow: 0 0 5px var(--disco-secondary);
+}
+
+[data-disco-mode="true"] .btn:hover {
+  transform: translateY(-2px) scale(1.05);
+  box-shadow: 0 6px 20px rgba(255, 0, 128, 0.6);
+}
+
+/* Status bar disco styling */
+[data-disco-mode="true"] .status-bar {
+  background: rgba(0, 0, 0, 0.5);
+  border-top: 2px solid var(--disco-red);
+  box-shadow: 0 -4px 15px rgba(255, 64, 64, 0.3);
+  color: var(--disco-warning);
+  text-shadow: 0 0 5px var(--disco-warning);
+}
+
+/* Card and section disco styling */
+[data-disco-mode="true"] .retention-section,
+[data-disco-mode="true"] .volume-section,
+[data-disco-mode="true"] .additional-fields {
+  background: rgba(0, 0, 0, 0.4);
+  border: 2px solid var(--disco-success);
+  box-shadow: 0 0 15px rgba(0, 255, 255, 0.3);
+}
+
+[data-disco-mode="true"] .retention-section h4,
+[data-disco-mode="true"] .volume-section h4,
+[data-disco-mode="true"] .additional-fields h4 {
+  color: var(--disco-success);
+  text-shadow: 0 0 10px var(--disco-success);
+  border-bottom: 2px solid var(--disco-success);
+}
+
+/* Tab navigation disco styling */
+[data-disco-mode="true"] .tab-navigation {
+  background: rgba(0, 0, 0, 0.3);
+  border-bottom: 2px solid var(--disco-orange);
+}
+
+[data-disco-mode="true"] .tab-button {
+  color: var(--disco-orange);
+  text-shadow: 0 0 5px var(--disco-orange);
+}
+
+[data-disco-mode="true"] .tab-button.active {
+  color: var(--disco-warning);
+  border-bottom-color: var(--disco-warning);
+  text-shadow: 0 0 10px var(--disco-warning);
+}
+
+/* Scrollbar disco styling */
+[data-disco-mode="true"] ::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+[data-disco-mode="true"] ::-webkit-scrollbar-thumb {
+  background: var(--disco-gradient-1);
+  background-size: 400% 400%;
+  animation: discoGradient 3s ease infinite;
+}
+
+/* Loading animations enhanced for disco */
+[data-disco-mode="true"] .loading-spinner {
+  border-color: var(--disco-purple);
+  border-top-color: var(--disco-warning);
+  animation: discoSpin 1s ease-in-out infinite;
+}
+
+[data-disco-mode="true"] .bulk-updating {
+  background: rgba(255, 0, 128, 0.1);
+  border: 2px solid var(--disco-primary);
+}
+
+[data-disco-mode="true"] .bulk-updating::after {
+  background: linear-gradient(90deg, transparent, var(--disco-primary), transparent);
+  animation: discoShimmer 1s infinite;
+}
+
+/* Disco keyframe animations */
+@keyframes discoGradient {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes discoSpin {
+  0% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(180deg) scale(1.2); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+
+@keyframes discoShimmer {
+  0% { transform: translateX(-100%) rotate(0deg); }
+  100% { transform: translateX(100%) rotate(360deg); }
+}
+
+@keyframes discoPulse {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.05); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes discoGlow {
+  0% { box-shadow: 0 0 5px currentColor; }
+  50% { box-shadow: 0 0 20px currentColor, 0 0 30px currentColor; }
+  100% { box-shadow: 0 0 5px currentColor; }
+}
+
+/* Text glow effects */
+[data-disco-mode="true"] h1,
+[data-disco-mode="true"] h2,
+[data-disco-mode="true"] h3,
+[data-disco-mode="true"] h4 {
+  animation: discoGlow 2s ease-in-out infinite;
+}
+
+/* Special effects for interactive elements */
+[data-disco-mode="true"] .result-item:hover {
+  animation: discoPulse 0.5s ease-in-out;
+}
+
+[data-disco-mode="true"] .btn:active {
+  animation: discoPulse 0.2s ease-in-out;
+}
+
+/* Responsive disco adjustments */
+@media (max-width: 768px) {
+  [data-disco-mode="true"] {
+    --disco-gradient-1: linear-gradient(180deg, #ff0080, #ff8000, #ffff00, #80ff00, #00ff80, #0080ff, #8000ff);
+  }
+}
+
+/* Reduced motion support for disco mode */
+@media (prefers-reduced-motion: reduce) {
+  [data-disco-mode="true"] * {
+    animation-duration: 5s !important;
+    animation-iteration-count: infinite !important;
+  }
+  
+  [data-disco-mode="true"] body {
+    background: linear-gradient(45deg, #ff0080, #8000ff) !important;
+    animation: none !important;
+  }
+}
+
 /* Button loading state */
 button:disabled {
     opacity: 0.6;

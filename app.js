@@ -153,6 +153,7 @@ class RecordsRetentionApp {
             
             // Initialize theme system
             this.initTheme();
+            this.initDiscoMode();
             
             // Check if database is empty and load test data if needed
             const existingData = await this.getAllSeries();
@@ -2851,7 +2852,67 @@ class RecordsRetentionApp {
         const html = document.documentElement;
         const currentTheme = html.getAttribute('data-color-scheme');
         const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        
+        // If switching to dark mode, disable disco mode first
+        if (newTheme === 'dark') {
+            this.setDiscoMode(false);
+        }
+        
         this.setTheme(newTheme);
+    }
+
+    toggleDiscoMode() {
+        const html = document.documentElement;
+        const isDisco = html.getAttribute('data-disco-mode') === 'true';
+        const newDiscoState = !isDisco;
+        
+        // If enabling disco mode, switch to light theme first
+        if (newDiscoState) {
+            this.setTheme('light');
+        }
+        
+        this.setDiscoMode(newDiscoState);
+    }
+
+    setDiscoMode(enabled) {
+        const html = document.documentElement;
+        const discoToggle = document.getElementById('discoToggle');
+        
+        if (enabled) {
+            html.setAttribute('data-disco-mode', 'true');
+            if (discoToggle) discoToggle.classList.add('active');
+        } else {
+            html.removeAttribute('data-disco-mode');
+            if (discoToggle) discoToggle.classList.remove('active');
+        }
+
+        // Save preference
+        try {
+            localStorage.setItem('iletsb_disco_mode', enabled ? 'true' : 'false');
+        } catch (e) {
+            // If storage is unavailable, continue without saving
+        }
+    }
+
+    initDiscoMode() {
+        // Load saved disco mode preference
+        let savedDiscoMode = false;
+        try {
+            const discoSetting = localStorage.getItem('iletsb_disco_mode');
+            savedDiscoMode = discoSetting === 'true';
+        } catch (err) {
+            // If storage is unavailable, default to false
+            savedDiscoMode = false;
+        }
+
+        // Apply saved disco mode
+        this.setDiscoMode(savedDiscoMode);
+
+        // Setup disco toggle button
+        const discoToggle = document.getElementById('discoToggle');
+        if (discoToggle) {
+            discoToggle.addEventListener('click', () => this.toggleDiscoMode());
+        }
     }
 }
 
