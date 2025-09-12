@@ -770,7 +770,32 @@ class RecordsRetentionApp {
     getSortValue(item, sortBy) {
         switch (sortBy) {
             case 'schedule_item':
-                return `${item.schedule_number || 'zzz'}-${item.item_number || 'zzz'}`;
+                // Handle 2-digit year interpretation for schedule numbers
+                const scheduleNum = item.schedule_number || 'zzz';
+                const itemNum = item.item_number || 'zzz';
+                
+                // Parse schedule number format "XX-XXX" and handle year interpretation
+                const parts = scheduleNum.split('-');
+                if (parts.length === 2) {
+                    const yearPart = parts[0];
+                    const seqPart = parts[1];
+                    
+                    // Convert 2-digit year to 4-digit (95 -> 1995, 25 -> 2025)
+                    let fullYear;
+                    if (yearPart.length === 2) {
+                        const yearNum = parseInt(yearPart, 10);
+                        // Assume 2-digit years 00-25 are 2000-2025, 26-99 are 1926-1999
+                        fullYear = yearNum <= 25 ? 2000 + yearNum : 1900 + yearNum;
+                    } else {
+                        fullYear = parseInt(yearPart, 10) || 9999;
+                    }
+                    
+                    // Pad to 4 digits for proper string sorting
+                    const paddedYear = String(fullYear).padStart(4, '0');
+                    return `${paddedYear}-${seqPart}-${itemNum}`;
+                }
+                
+                return `${scheduleNum}-${itemNum}`;
             case 'dates_covered_start':
                 return this.normalizeDateForSorting(item.dates_covered_start);
             case 'approval_date':

@@ -834,6 +834,8 @@ select.form-control {
 
 /* Admin dropdown menu */
 .admin-menu { position: relative; }
+
+/* Remove conflicting stacking context */
 .admin-menu .dropdown {
   position: absolute;
   right: 0;
@@ -845,6 +847,39 @@ select.form-control {
   box-shadow: var(--shadow-lg);
   padding: 6px;
   z-index: 1000;
+}
+
+/* Admin dropdown now works with top-nav above disco mode */
+[data-disco-mode="true"] .admin-menu .dropdown {
+  background: linear-gradient(135deg, rgba(0, 0, 0, 0.95), rgba(128, 0, 255, 0.9));
+  border: 2px solid var(--disco-warning);
+  box-shadow: 0 8px 32px rgba(255, 255, 0, 0.6);
+  z-index: 10001;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+}
+
+[data-disco-mode="true"] .admin-menu .dropdown-item {
+  color: var(--disco-warning);
+  text-shadow: 0 0 5px var(--disco-warning);
+}
+
+[data-disco-mode="true"] .admin-menu .dropdown-item:hover,
+[data-disco-mode="true"] .admin-menu .dropdown-item:focus {
+  background: rgba(255, 0, 128, 0.3);
+  color: white;
+  text-shadow: 0 0 10px white;
+}
+
+[data-disco-mode="true"] .admin-menu .dropdown-item.danger {
+  color: var(--disco-error);
+  text-shadow: 0 0 5px var(--disco-error);
+}
+
+[data-disco-mode="true"] .admin-menu .dropdown-sep {
+  border-top: 1px solid var(--disco-secondary);
+  box-shadow: 0 0 5px var(--disco-secondary);
 }
 .admin-menu .dropdown.hidden { display: none; }
 .admin-menu .dropdown-item {
@@ -2234,6 +2269,11 @@ select.form-control {
     to { transform: rotate(360deg); }
 }
 
+@keyframes discoGlow {
+  0%, 100% { box-shadow: 0 4px 30px rgba(255, 0, 128, 0.6), 0 0 20px rgba(255, 255, 0, 0.3); }
+  50% { box-shadow: 0 4px 30px rgba(0, 255, 255, 0.8), 0 0 30px rgba(255, 0, 255, 0.5); }
+}
+
 .bulk-updating {
     background-color: var(--color-loading-bg);
     border: 1px solid var(--color-loading-border);
@@ -2319,18 +2359,20 @@ select.form-control {
   background-size: 400% 400%;
   animation: discoGradient 8s ease infinite;
   color: white;
+  isolation: isolate;
 }
 
 [data-disco-mode="true"] .top-nav {
-  background: rgba(0, 0, 0, 0.3);
-  backdrop-filter: blur(10px);
-  border-bottom: 2px solid var(--disco-primary);
-  box-shadow: 0 4px 20px rgba(255, 0, 128, 0.3);
+  background: linear-gradient(135deg, #ff0080, #8000ff, #00ff80);
+  border-bottom: 3px solid var(--disco-warning);
+  box-shadow: 0 4px 30px rgba(255, 0, 128, 0.6), 0 0 20px rgba(255, 255, 0, 0.3);
+  z-index: 10000;
+  position: relative;
+  animation: discoGlow 3s ease-in-out infinite;
 }
 
 [data-disco-mode="true"] .main-content {
   background: rgba(0, 0, 0, 0.2);
-  backdrop-filter: blur(5px);
 }
 
 /* Search pane disco styling */
@@ -2344,6 +2386,12 @@ select.form-control {
   color: var(--disco-warning);
   text-shadow: 0 0 10px var(--disco-warning);
   border-bottom: 2px solid var(--disco-warning);
+  padding-bottom: var(--space-8);
+  flex: 1;
+  border-radius: var(--radius-md);
+  padding: var(--space-8) var(--space-12);
+  background: rgba(0, 0, 0, 0.3);
+  margin-bottom: var(--space-12);
 }
 
 /* Results pane disco styling */
@@ -2356,6 +2404,8 @@ select.form-control {
   background: rgba(0, 0, 0, 0.4);
   border-bottom: 2px solid var(--disco-blue);
   box-shadow: 0 2px 10px rgba(0, 128, 255, 0.3);
+  border-radius: var(--radius-md);
+  padding: var(--space-8) var(--space-12);
 }
 
 [data-disco-mode="true"] .results-table-header {
@@ -2407,6 +2457,7 @@ select.form-control {
   background: rgba(0, 0, 0, 0.4);
   border-bottom: 2px solid var(--disco-green);
   box-shadow: 0 2px 10px rgba(128, 255, 0, 0.3);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
 }
 
 /* Form elements disco styling */
