@@ -161,17 +161,17 @@
 
 /* Combined dark mode selector - Claude-inspired dark theme */
 [data-color-scheme="dark"] {
-    /* Dark mode primitive colors */
-    --color-gray-50: rgba(17, 24, 39, 1);
-    --color-gray-100: rgba(31, 41, 55, 1);
-    --color-gray-200: rgba(55, 65, 81, 1);
-    --color-gray-300: rgba(75, 85, 99, 1);
-    --color-gray-400: rgba(107, 114, 128, 1);
-    --color-gray-500: rgba(156, 163, 175, 1);
-    --color-gray-600: rgba(209, 213, 219, 1);
-    --color-gray-700: rgba(229, 231, 235, 1);
-    --color-gray-800: rgba(243, 244, 246, 1);
-    --color-gray-900: rgba(249, 250, 251, 1);
+    /* Dark mode primitive colors - 10% brighter */
+    --color-gray-50: rgba(31, 41, 55, 1);
+    --color-gray-100: rgba(45, 55, 72, 1);
+    --color-gray-200: rgba(71, 85, 105, 1);
+    --color-gray-300: rgba(100, 116, 139, 1);
+    --color-gray-400: rgba(148, 163, 184, 1);
+    --color-gray-500: rgba(203, 213, 225, 1);
+    --color-gray-600: rgba(226, 232, 240, 1);
+    --color-gray-700: rgba(241, 245, 249, 1);
+    --color-gray-800: rgba(248, 250, 252, 1);
+    --color-gray-900: rgba(250, 252, 253, 1);
 
     /* RGB versions for opacity control (Dark Mode) */
     --color-gray-400-rgb: 107, 114, 128;
